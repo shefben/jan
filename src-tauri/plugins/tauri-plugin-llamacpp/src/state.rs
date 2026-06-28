@@ -8,6 +8,8 @@ pub struct SessionInfo {
     pub port: i32,
     pub model_id: String,
     pub is_embedding: bool,
+    #[serde(default)]
+    pub is_reranking: bool,
     pub api_key: String,
 }
 

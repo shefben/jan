@@ -220,7 +220,7 @@ export interface ModelsService {
   ): Promise<void>
   updateModelSettings(
     modelId: string,
-    patch: Record<string, string | number | boolean | null | undefined>
+    patch: Record<string, string | number | boolean | string[] | Record<string, boolean> | null | undefined>
   ): Promise<void>
   isModelSupported(
     modelPath: string,

@@ -134,11 +134,13 @@ export function normalizeLlamacppConfig(config: any): LlamacppConfig {
 
 export async function loadLlamaModel(
   modelId: string,
-  isEmbedding: boolean = false
+  isEmbedding: boolean = false,
+  isReranking: boolean = false
 ): Promise<SessionInfo> {
   return await invoke('plugin:llamacpp|load_llama_model', {
     modelId,
     isEmbedding,
+    isReranking,
   })
 }
 
@@ -148,11 +150,13 @@ export async function unloadLlamaModel(modelId: string): Promise<UnloadResult> {
 
 export async function ensureSessionReady(
   modelId: string,
-  isEmbedding: boolean = false
+  isEmbedding: boolean = false,
+  isReranking: boolean = false
 ): Promise<SessionInfo> {
   return await invoke('plugin:llamacpp|ensure_session_ready', {
     modelId,
     isEmbedding,
+    isReranking,
   })
 }
 

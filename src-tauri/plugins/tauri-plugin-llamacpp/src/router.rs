@@ -112,6 +112,41 @@ pub fn router_args(
     args
 }
 
+
+async fn wait_for_router_http_ready(
+    port: u16,
+    api_key: &str,
+    timeout: Duration,
+) -> ServerResult<()> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(750))
+        .build()
+        .map_err(|e| {
+            ServerError::Llamacpp(LlamacppError::new(
+                ErrorCode::InternalError,
+                "Failed to build router readiness HTTP client".into(),
+                Some(e.to_string()),
+            ))
+        })?;
+    let url = format!("http://127.0.0.1:{}/models", port);
+    let start = Instant::now();
+    loop {
+        match client.get(&url).bearer_auth(api_key).send().await {
+            Ok(resp) if resp.status().is_success() => return Ok(()),
+            Ok(resp) => log::debug!("router readiness HTTP probe returned {}", resp.status()),
+            Err(e) => log::debug!("router readiness HTTP probe failed: {}", e),
+        }
+        if start.elapsed() >= timeout {
+            return Err(ServerError::Llamacpp(LlamacppError::new(
+                ErrorCode::ModelLoadTimedOut,
+                "Router printed a readiness line but did not answer HTTP readiness probes.".into(),
+                Some(format!("waited {:?}", timeout)),
+            )));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Spawn `llama-server` in router mode and wait for it to become ready.
 ///
 /// On readiness-detection failure or spawn failure, the child is killed before
@@ -306,6 +341,7 @@ pub async fn start_router(
     loop {
         tokio::select! {
             Some(true) = ready_rx.recv() => {
+                wait_for_router_http_ready(port, &api_key, Duration::from_secs(10)).await?;
                 log::info!("llama-server router is ready.");
                 break;
             }
@@ -556,6 +592,24 @@ async fn terminate_router_process(child: &mut Child) {
     }
 }
 
+
+fn collect_descendant_pids(sys: &System, root: Pid) -> Vec<Pid> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    while let Some(parent) = stack.pop() {
+        for process in sys.processes().values() {
+            if process.parent() == Some(parent) {
+                let pid = process.pid();
+                if !out.contains(&pid) {
+                    out.push(pid);
+                    stack.push(pid);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Force-kill by PID only; used when the handle is owned elsewhere
 /// (e.g. the watcher loop). Does not reap — the holder of the `Child`
 /// will reap on its next operation or on drop.
@@ -563,12 +617,7 @@ pub fn force_kill_router_tree_by_pid(router_pid: u32) {
     let mut sys = System::new();
     sys.refresh_processes(ProcessesToUpdate::All, true);
     let rpid = Pid::from_u32(router_pid);
-    let children: Vec<Pid> = sys
-        .processes()
-        .values()
-        .filter(|p| p.parent() == Some(rpid))
-        .map(|p| p.pid())
-        .collect();
+    let children: Vec<Pid> = collect_descendant_pids(&sys, rpid);
     log::info!(
         "force_kill_router_tree_by_pid: router pid {} + {} direct child(ren)",
         router_pid,
@@ -591,12 +640,7 @@ pub async fn force_kill_router_tree(mut handle: RouterHandle) {
     sys.refresh_processes(ProcessesToUpdate::All, true);
 
     let rpid = Pid::from_u32(router_pid);
-    let children: Vec<Pid> = sys
-        .processes()
-        .values()
-        .filter(|p| p.parent() == Some(rpid))
-        .map(|p| p.pid())
-        .collect();
+    let children: Vec<Pid> = collect_descendant_pids(&sys, rpid);
 
     log::info!(
         "force_kill_router_tree: router pid {} + {} direct child(ren)",

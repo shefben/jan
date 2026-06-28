@@ -41,6 +41,46 @@ export function getRAGTools(retrievalLimit: number): MCPTool[] {
             description:
               'Optional: Filter search to specific file IDs from list_attachments',
           },
+          thread_id: {
+            type: 'string',
+            description: 'Thread ID for thread-scoped retrieval. Normally injected by Jan.',
+          },
+          project_id: {
+            type: 'string',
+            description: 'Project ID for project-scoped retrieval. Normally injected by Jan.',
+          },
+          scope: {
+            type: 'string',
+            enum: ['thread', 'project'],
+            description: 'Search scope. Defaults to thread.',
+          },
+          rerank: {
+            type: 'boolean',
+            description: 'Optional: force-enable or force-disable local reranking for this call.',
+          },
+          reranking_model: {
+            type: 'string',
+            description: 'Optional: explicit local GGUF reranker model ID, or auto.',
+          },
+          rerank_max_candidates: {
+            type: 'number',
+            description: 'Optional: maximum vector candidates to send into reranking.',
+            minimum: 1,
+          },
+          rerank_top_n_after: {
+            type: 'number',
+            description: 'Optional: number of citations to keep after reranking.',
+            minimum: 1,
+          },
+          rerank_min_relevance_score: {
+            type: 'number',
+            description: 'Optional: drop reranked results below this relevance score.',
+          },
+          rerank_evidence_mode: {
+            type: 'string',
+            enum: ['off', 'top_n', 'all'],
+            description: 'Optional: include heuristic evidence snippets with reranked citations.',
+          },
         },
         required: ['query'],
       },
@@ -65,6 +105,19 @@ export function getRAGTools(retrievalLimit: number): MCPTool[] {
             type: 'number',
             description:
               'End of chunk range (inclusive, 0-indexed). For single chunk, use start_order = end_order.',
+          },
+          thread_id: {
+            type: 'string',
+            description: 'Thread ID for thread-scoped chunk fetches. Normally injected by Jan.',
+          },
+          project_id: {
+            type: 'string',
+            description: 'Project ID for project-scoped chunk fetches. Normally injected by Jan.',
+          },
+          scope: {
+            type: 'string',
+            enum: ['thread', 'project'],
+            description: 'Chunk source scope. Defaults to thread.',
           },
         },
         required: ['file_id', 'start_order', 'end_order'],

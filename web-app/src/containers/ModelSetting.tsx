@@ -86,7 +86,7 @@ export function ModelSetting({
   // and clears it. Avoids a flurry of slider drags rewriting model.yml + bouncing
   // the router on every keystroke.
   const pendingPatchesRef = useRef<
-    Map<string, Record<string, string | number | boolean | null | undefined>>
+    Map<string, Record<string, string | number | boolean | string[] | Record<string, boolean> | null | undefined>>
   >(new Map())
   const rollbackSettingsRef = useRef<Map<string, Model['settings'] | undefined>>(
     new Map()
@@ -132,7 +132,7 @@ export function ModelSetting({
   )
   const debouncedPersistModelSettings = (
     modelId: string,
-    patch: Record<string, string | number | boolean | null | undefined>,
+    patch: Record<string, string | number | boolean | string[] | Record<string, boolean> | null | undefined>,
     previousSettings: Model['settings'] | undefined
   ) => {
     if (!rollbackSettingsRef.current.has(modelId)) {

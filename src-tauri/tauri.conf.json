@@ -21,21 +21,25 @@
       ],
       "csp": {
         "default-src": "'self' customprotocol: asset: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
-        "connect-src": "'self' asset: ipc: data: http://asset.localhost http://ipc.localhost http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https: http:",
+        "connect-src": "'self' asset: ipc: data: http://asset.localhost http://ipc.localhost http://127.0.0.1:* http://localhost:* ws://localhost:* ws://127.0.0.1:* https:",
         "font-src": [
           "https://fonts.gstatic.com blob: data: tauri://localhost http://tauri.localhost"
         ],
         "img-src": "'self' asset: http://asset.localhost blob: data: https:",
         "media-src": "'self' asset: http://asset.localhost blob: data: https:",
         "style-src": "'unsafe-inline' 'self' https://fonts.googleapis.com",
-        "script-src": "'self' 'unsafe-eval' asset: $APPDATA/**.* http://asset.localhost https://asset.localhost https://eu-assets.i.posthog.com https://posthog.com"
+        "script-src": "'self' asset: http://asset.localhost https://asset.localhost https://eu-assets.i.posthog.com https://posthog.com"
       },
-      "dangerousDisableAssetCspModification": ["style-src"],
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ],
       "assetProtocol": {
         "enable": true,
         "scope": {
           "requireLiteralLeadingDot": false,
-          "allow": ["**/*"]
+          "allow": [
+            "**/*"
+          ]
         }
       }
     }
@@ -67,6 +71,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["resources/pre-install/**/*", "resources/LICENSE"]
+    "resources": [
+      "resources/pre-install/**/*",
+      "resources/LICENSE",
+      "resources/bin/**/*"
+    ]
   }
 }

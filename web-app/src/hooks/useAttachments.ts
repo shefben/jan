@@ -16,6 +16,15 @@ export type AttachmentsSettings = {
   searchMode: 'auto' | 'ann' | 'linear'
   parseMode: 'auto' | 'inline' | 'embeddings' | 'prompt'
   autoInlineContextRatio: number
+  rerankingMode: 'auto' | 'off' | 'model'
+  rerankingModel: string
+  rerankTopKBefore: number
+  rerankCandidateMultiplier: number
+  rerankMaxCandidates: number
+  rerankTopNAfter: number
+  rerankMinRelevanceScore: number
+  rerankMaxTokensPerDoc: number
+  rerankEvidenceMode: 'off' | 'top_n' | 'all'
 }
 
 type AttachmentsStore = AttachmentsSettings & {
@@ -31,6 +40,8 @@ type AttachmentsStore = AttachmentsSettings & {
   setSearchMode: (v: 'auto' | 'ann' | 'linear') => void
   setParseMode: (v: 'auto' | 'inline' | 'embeddings' | 'prompt') => void
   setAutoInlineContextRatio: (v: number) => void
+  setRerankingMode: (v: 'auto' | 'off' | 'model') => void
+  setRerankingModel: (v: string) => void
   setSetting: (key: string, value: unknown) => void
 }
 
@@ -54,6 +65,15 @@ export const useAttachments = create<AttachmentsStore>()((set) => ({
   searchMode: 'auto',
   parseMode: 'auto',
   autoInlineContextRatio: 0.75,
+  rerankingMode: 'auto',
+  rerankingModel: 'auto',
+  rerankTopKBefore: 60,
+  rerankCandidateMultiplier: 5,
+  rerankMaxCandidates: 40,
+  rerankTopNAfter: 8,
+  rerankMinRelevanceScore: 0,
+  rerankMaxTokensPerDoc: 4096,
+  rerankEvidenceMode: 'off',
   settingsDefs: [],
   setSetting: async (key, value) => {
     const ext = getRagExtension()
@@ -121,6 +141,33 @@ export const useAttachments = create<AttachmentsStore>()((set) => ({
         autoInlineContextRatio:
           (map.get('auto_inline_context_ratio') as number | undefined) ??
           prev.autoInlineContextRatio,
+        rerankingMode:
+          (map.get('reranking_mode') as 'auto' | 'off' | 'model' | undefined) ??
+          prev.rerankingMode,
+        rerankingModel:
+          (map.get('reranking_model') as string | undefined) ??
+          prev.rerankingModel,
+        rerankTopKBefore:
+          (map.get('rerank_top_k_before') as number | undefined) ??
+          prev.rerankTopKBefore,
+        rerankCandidateMultiplier:
+          (map.get('rerank_candidate_multiplier') as number | undefined) ??
+          prev.rerankCandidateMultiplier,
+        rerankMaxCandidates:
+          (map.get('rerank_max_candidates') as number | undefined) ??
+          prev.rerankMaxCandidates,
+        rerankTopNAfter:
+          (map.get('rerank_top_n_after') as number | undefined) ??
+          prev.rerankTopNAfter,
+        rerankMinRelevanceScore:
+          (map.get('rerank_min_relevance_score') as number | undefined) ??
+          prev.rerankMinRelevanceScore,
+        rerankMaxTokensPerDoc:
+          (map.get('rerank_max_tokens_per_doc') as number | undefined) ??
+          prev.rerankMaxTokensPerDoc,
+        rerankEvidenceMode:
+          (map.get('rerank_evidence_mode') as 'off' | 'top_n' | 'all' | undefined) ??
+          prev.rerankEvidenceMode,
       }))
 
       return true
@@ -326,6 +373,14 @@ export const useAttachments = create<AttachmentsStore>()((set) => ({
           : d
       ),
     }))
+  },
+  setRerankingMode: async (v) => {
+    await useAttachments.getState().setSetting('reranking_mode', v)
+    set({ rerankingMode: v })
+  },
+  setRerankingModel: async (v) => {
+    await useAttachments.getState().setSetting('reranking_model', v)
+    set({ rerankingModel: v })
   },
 }))
 

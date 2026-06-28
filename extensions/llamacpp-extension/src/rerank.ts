@@ -181,14 +181,17 @@ function evidenceFor(query: string, text: string): { evidence: string; contribut
 
 export function postprocessRerankResponse(raw: any, req: NormalizedRerankRequest, meta: Partial<RerankTraceMeta> = {}) {
   const rawResults = Array.isArray(raw?.results) ? raw.results : Array.isArray(raw?.data) ? raw.data : []
-  let results = rawResults.map((item: any, fallbackIndex: number) => {
-    const index = Number.isFinite(Number(item.index)) ? Number(item.index) : fallbackIndex
+  const seen = new Set<number>()
+  let results = rawResults.flatMap((item: any, fallbackIndex: number) => {
+    const index = Number.isFinite(Number(item.index)) ? Math.trunc(Number(item.index)) : fallbackIndex
+    if (index < 0 || index >= req.originalDocuments.length || seen.has(index)) return []
+    seen.add(index)
     const rawScore = Number(item.relevance_score ?? item.score ?? item.logit ?? 0)
     const score = normalizeScore(rawScore, req.normalize_scores && !req.raw_scores)
     const out: any = { index, relevance_score: score }
     if (req.raw_scores) out.raw_relevance_score = rawScore
     if (req.return_documents) out.document = req.originalDocuments[index]
-    return out
+    return [out]
   })
   results.sort((a: any, b: any) => Number(b.relevance_score) - Number(a.relevance_score))
   if (typeof req.min_relevance_score === 'number') {

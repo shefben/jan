@@ -332,6 +332,7 @@ pub async fn load_llama_model<R: Runtime>(
     app_handle: tauri::AppHandle<R>,
     model_id: String,
     is_embedding: bool,
+    is_reranking: Option<bool>,
 ) -> ServerResult<SessionInfo> {
     let (port, api_key, pid) = router_endpoint(&app_handle)
         .await
@@ -342,6 +343,7 @@ pub async fn load_llama_model<R: Runtime>(
         port: port as i32,
         model_id,
         is_embedding,
+        is_reranking: is_reranking.unwrap_or(false),
         api_key,
     })
 }
@@ -384,6 +386,7 @@ pub async fn ensure_session_ready<R: Runtime>(
     app_handle: tauri::AppHandle<R>,
     model_id: String,
     is_embedding: bool,
+    is_reranking: Option<bool>,
 ) -> Result<SessionInfo, String> {
     let (port, api_key, pid) = router_endpoint(&app_handle).await?;
     post_load(port, &api_key, &model_id)
@@ -394,6 +397,7 @@ pub async fn ensure_session_ready<R: Runtime>(
         port: port as i32,
         model_id,
         is_embedding,
+        is_reranking: is_reranking.unwrap_or(false),
         api_key,
     })
 }
@@ -414,6 +418,7 @@ pub async fn find_session_by_model<R: Runtime>(
             port: port as i32,
             model_id,
             is_embedding: false,
+            is_reranking: false,
             api_key,
         }))
     } else {

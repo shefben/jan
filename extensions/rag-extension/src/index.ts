@@ -225,25 +225,57 @@ export default class RagExtension extends RAGExtension {
     const threadId = String(args['thread_id'] || '')
     const projectId = String(args['project_id'] || '')
     const query = String(args['query'] || '')
-    const fileIds = args['file_ids'] as string[] | undefined
+    const rawFileIds = args['file_ids']
+    const fileIds = Array.isArray(rawFileIds)
+      ? rawFileIds.map((id) => String(id)).filter(Boolean)
+      : undefined
     const scope = String(args['scope'] || 'thread')
 
     // Use project_id as threadId when scope is project
     const effectiveThreadId = scope === 'project' ? projectId || threadId : threadId
 
     const s = this.config
-    const requestedTopK = (args['top_k'] as number) || s.retrievalLimit || 3
-    let shouldRerank = s.rerankingMode !== 'off'
-    if (shouldRerank && s.rerankingMode === 'auto') {
+    const requestedTopK = Math.max(1, Number(args['top_k'] ?? s.retrievalLimit ?? 3))
+    const requestedRerank = args['rerank']
+    const requestedRerankModel =
+      typeof args['reranking_model'] === 'string' && args['reranking_model'].trim()
+        ? String(args['reranking_model']).trim()
+        : undefined
+    let shouldRerank =
+      requestedRerank === false || requestedRerank === 'false'
+        ? false
+        : requestedRerank === true || requestedRerank === 'true'
+          ? true
+          : s.rerankingMode !== 'off'
+    if (shouldRerank && s.rerankingMode === 'auto' && requestedRerank !== true && requestedRerank !== 'true') {
       shouldRerank = await this.isLocalRerankingAvailable()
     }
-    const multiplier = Math.max(1, Number(s.rerankCandidateMultiplier || 1))
-    const maxCandidates = Math.max(requestedTopK, Number(s.rerankMaxCandidates || s.rerankTopKBefore || 40))
-    const legacyBefore = Math.max(requestedTopK, Number(s.rerankTopKBefore || 0))
+    const multiplier = Math.max(1, Number(args['rerank_candidate_multiplier'] ?? s.rerankCandidateMultiplier ?? 1))
+    const maxCandidates = Math.max(
+      requestedTopK,
+      Number(args['rerank_max_candidates'] ?? s.rerankMaxCandidates ?? s.rerankTopKBefore ?? 40)
+    )
+    const legacyBefore = Math.max(requestedTopK, Number(args['rerank_top_k_before'] ?? s.rerankTopKBefore ?? 0))
     const multipliedBefore = Math.max(requestedTopK, Math.ceil(requestedTopK * multiplier))
     const topK = shouldRerank ? Math.min(maxCandidates, Math.max(legacyBefore, multipliedBefore)) : requestedTopK
     const threshold = shouldRerank ? Math.min(s.retrievalThreshold ?? 0.3, 0.05) : (s.retrievalThreshold ?? 0.3)
     const mode: 'auto' | 'ann' | 'linear' = s.searchMode || 'auto'
+    const rerankOverrides = {
+      model: requestedRerankModel,
+      topNAfter: Number(args['rerank_top_n_after'] ?? s.rerankTopNAfter ?? requestedTopK),
+      minRelevanceScore:
+        args['rerank_min_relevance_score'] === undefined
+          ? s.rerankMinRelevanceScore
+          : Number(args['rerank_min_relevance_score']),
+      maxTokensPerDoc:
+        args['rerank_max_tokens_per_doc'] === undefined
+          ? s.rerankMaxTokensPerDoc
+          : Number(args['rerank_max_tokens_per_doc']),
+      evidenceMode:
+        args['rerank_evidence_mode'] === 'top_n' || args['rerank_evidence_mode'] === 'all' || args['rerank_evidence_mode'] === 'off'
+          ? args['rerank_evidence_mode']
+          : s.rerankEvidenceMode,
+    }
 
     if (s.enabled === false) {
       return {
@@ -316,7 +348,7 @@ export default class RagExtension extends RAGExtension {
         })) ?? []
       let reranking: Record<string, unknown> = { enabled: false }
       if (shouldRerank && citations.length > 1) {
-        const reranked = await this.rerankCitations(query, citations, requestedTopK)
+        const reranked = await this.rerankCitations(query, citations, requestedTopK, rerankOverrides)
         citations = reranked.citations
         reranking = reranked.meta
       } else {
@@ -329,7 +361,7 @@ export default class RagExtension extends RAGExtension {
         query,
         citations,
         mode,
-        reranking,
+        reranking: { applied: reranking.enabled === true, ...reranking },
       }
       return {
         error: '',
@@ -356,19 +388,21 @@ export default class RagExtension extends RAGExtension {
     args: Record<string, unknown>
   ): Promise<MCPToolCallResult> {
     const threadId = String(args['thread_id'] || '')
+    const projectId = String(args['project_id'] || '')
     const fileId = String(args['file_id'] || '')
     const startOrder = args['start_order'] as number | undefined
     const endOrder = args['end_order'] as number | undefined
     const scope = String(args['scope'] || 'thread')
+    const effectiveThreadId = scope === 'project' ? projectId || threadId : threadId
 
     if (
       !fileId ||
       startOrder === undefined ||
       endOrder === undefined ||
-      (!threadId && scope === 'thread')
+      (!effectiveThreadId && (scope === 'thread' || scope === 'project'))
     ) {
       return {
-        error: 'Missing thread_id, file_id, start_order, or end_order',
+        error: 'Missing thread_id/project_id, file_id, start_order, or end_order',
         content: [{ type: 'text', text: 'Missing required parameters' }],
       }
     }
@@ -388,13 +422,14 @@ export default class RagExtension extends RAGExtension {
 
       let chunks
       if (scope === 'project' && vec.getChunksForProject) {
-        chunks = await vec.getChunksForProject(threadId, fileId, startOrder, endOrder)
+        chunks = await vec.getChunksForProject(effectiveThreadId, fileId, startOrder, endOrder)
       } else {
-        chunks = await vec.getChunks!(threadId, fileId, startOrder, endOrder)
+        chunks = await vec.getChunks!(effectiveThreadId, fileId, startOrder, endOrder)
       }
 
       const payload = {
         thread_id: threadId,
+        project_id: projectId,
         scope,
         file_id: fileId,
         chunks: chunks || [],
@@ -491,8 +526,8 @@ export default class RagExtension extends RAGExtension {
     const vec = window.core?.extensionManager.get(
       ExtensionTypeEnum.VectorDB
     ) as unknown as VectorDBExtension
-    if (!vec?.createCollection || !vec?.insertChunks) {
-      throw new Error('Vector DB extension not available')
+    if (typeof (vec as any)?.ingestFile !== 'function') {
+      throw new Error('Vector DB extension does not support file ingestion')
     }
 
     // Load settings
@@ -514,13 +549,6 @@ export default class RagExtension extends RAGExtension {
 
       const fileName = f.name || f.path.split(/[\\/]/).pop()
       // Preferred/required path: let Vector DB extension handle full file ingestion
-      const canIngestFile = typeof (vec as any)?.ingestFile === 'function'
-      if (!canIngestFile) {
-        console.error(
-          '[RAG] Vector DB extension missing ingestFile; cannot ingest document'
-        )
-        continue
-      }
       const info = await (vec as VectorDBExtension).ingestFile(
         threadId,
         { path: f.path, name: fileName, type: f.type, size: f.size },
@@ -541,18 +569,34 @@ export default class RagExtension extends RAGExtension {
   private async rerankCitations(
     query: string,
     citations: Array<Record<string, unknown>>,
-    requestedTopK: number
+    requestedTopK: number,
+    options: {
+      model?: string
+      topNAfter?: number
+      minRelevanceScore?: number
+      maxTokensPerDoc?: number
+      evidenceMode?: 'off' | 'top_n' | 'all'
+    } = {}
   ): Promise<{ citations: Array<Record<string, unknown>>; meta: Record<string, unknown> }> {
     const llm = window.core?.extensionManager.getByName(
       '@janhq/llamacpp-extension'
     ) as AIEngine & {
       rerank?: (req: any) => Promise<{ results: Array<{ index: number; relevance_score: number; evidence?: string; contribution?: string }>; meta?: Record<string, unknown> }>
     }
-    if (!llm?.rerank) return { citations: citations.slice(0, requestedTopK), meta: { enabled: false, reason: 'llamacpp extension has no rerank method' } }
+    if (!llm?.rerank) {
+      return {
+        citations: citations.slice(0, requestedTopK),
+        meta: { enabled: false, applied: false, reason: 'llamacpp extension has no rerank method' },
+      }
+    }
+
     try {
-      const topN = Math.max(1, Math.min(citations.length, this.config.rerankTopNAfter || requestedTopK))
+      const topN = Math.max(1, Math.min(citations.length, Number(options.topNAfter || this.config.rerankTopNAfter || requestedTopK)))
+      const requestedModel =
+        options.model ||
+        (this.config.rerankingMode === 'model' ? this.config.rerankingModel : 'auto')
       const response = await llm.rerank({
-        model: this.config.rerankingMode === 'model' ? this.config.rerankingModel : 'auto',
+        model: requestedModel,
         query,
         documents: citations.map((c, index) => ({
           text: String(c.text ?? ''),
@@ -566,25 +610,63 @@ export default class RagExtension extends RAGExtension {
         })),
         top_n: topN,
         return_documents: true,
-        min_relevance_score: this.config.rerankMinRelevanceScore || undefined,
-        max_tokens_per_doc: this.config.rerankMaxTokensPerDoc || 4096,
-        evidence_mode: this.config.rerankEvidenceMode,
+        min_relevance_score:
+          typeof options.minRelevanceScore === 'number'
+            ? options.minRelevanceScore
+            : this.config.rerankMinRelevanceScore || undefined,
+        max_tokens_per_doc:
+          typeof options.maxTokensPerDoc === 'number' && options.maxTokensPerDoc > 0
+            ? options.maxTokensPerDoc
+            : this.config.rerankMaxTokensPerDoc || 4096,
+        evidence_mode: options.evidenceMode || this.config.rerankEvidenceMode,
       })
-      const reranked = response.results
-        .map((r) => ({
-          ...citations[r.index],
-          rerank_score: r.relevance_score,
-          evidence: r.evidence,
-          contribution: r.contribution,
-        }))
-        .filter((c) => c.text)
-      return { citations: reranked, meta: { enabled: true, ...(response.meta ?? {}) } }
+
+      const seen = new Set<number>()
+      const reranked: Array<Record<string, unknown>> = []
+      for (const result of response.results || []) {
+        const index = Number(result.index)
+        if (!Number.isInteger(index) || index < 0 || index >= citations.length || seen.has(index)) {
+          continue
+        }
+        seen.add(index)
+        const source = citations[index]
+        if (!source?.text) continue
+        reranked.push({
+          ...source,
+          rerank_score: result.relevance_score,
+          evidence: result.evidence,
+          contribution: result.contribution,
+        })
+      }
+
+      if (reranked.length === 0) {
+        return {
+          citations: citations.slice(0, requestedTopK),
+          meta: {
+            enabled: false,
+            applied: false,
+            fallback_used: true,
+            fallback_reason: 'reranker returned no valid result indices',
+          },
+        }
+      }
+
+      return {
+        citations: reranked,
+        meta: {
+          enabled: true,
+          applied: true,
+          requested_model: requestedModel,
+          ...(response.meta ?? {}),
+        },
+      }
     } catch (e) {
       console.warn('[RAG] Reranking failed, falling back to vector order:', e)
       return {
         citations: citations.slice(0, requestedTopK),
         meta: {
           enabled: false,
+          applied: false,
           fallback_used: true,
           error: e instanceof Error ? e.message : String(e),
         },
@@ -678,7 +760,17 @@ export default class RagExtension extends RAGExtension {
     const data: Array<{ embedding: number[]; index: number }> = res?.data || []
     const out: number[][] = new Array(texts.length)
     for (const item of data) {
-      out[item.index] = item.embedding
+      if (
+        Number.isInteger(item.index) &&
+        item.index >= 0 &&
+        item.index < texts.length &&
+        Array.isArray(item.embedding)
+      ) {
+        out[item.index] = item.embedding
+      }
+    }
+    if (out.some((embedding) => !Array.isArray(embedding))) {
+      throw new Error('Embedding response did not contain one embedding per input text')
     }
     return out
   }

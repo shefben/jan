@@ -378,6 +378,22 @@ async function findLlamaServerDir(
   return null
 }
 
+
+function toPortableRelativeId(rootDir: string, currentDir: string): string {
+  const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/g, '')
+  const root = normalize(rootDir)
+  const current = normalize(currentDir)
+  if (current === root) return ''
+  const prefix = `${root}/`
+  return current.startsWith(prefix) ? current.slice(prefix.length) : current.split('/').pop() ?? current
+}
+
+function inferQuantType(...parts: Array<string | undefined>): string | undefined {
+  const haystack = parts.filter(Boolean).join(' ')
+  const match = haystack.match(/\b(?:IQ|Q|F)(?:\d+)(?:_[A-Z0-9]+)?\b/i)
+  return match?.[0]?.toUpperCase()
+}
+
 // Folder structure for llamacpp extension:
 // <Jan's data folder>/llamacpp
 //  - models/<modelId>/
@@ -1840,7 +1856,7 @@ export default class llamacpp_extension extends AIEngine {
     return {
       id: modelId,
       name: modelConfig.name ?? modelId,
-      quant_type: undefined, // TODO: parse quantization type from model.yml or model.gguf
+      quant_type: inferQuantType(modelConfig.name, modelConfig.model_path, modelId),
       providerId: this.provider,
       port: 0, // port is not known until the model is loaded
       sizeBytes: modelConfig.size_bytes ?? 0,
@@ -2053,7 +2069,7 @@ export default class llamacpp_extension extends AIEngine {
       if (await fs.existsSync(modelConfigPath)) {
         // +1 to remove the leading slash
         // NOTE: this does not handle Windows path \\
-        modelIds.push(currentDir.slice(modelsDir.length + 1))
+        modelIds.push(toPortableRelativeId(modelsDir, currentDir))
         continue
       }
 
@@ -2112,7 +2128,7 @@ export default class llamacpp_extension extends AIEngine {
         const modelInfo = {
           id: modelId,
           name: modelConfig.name ?? modelId,
-          quant_type: undefined, // TODO: parse quantization type from model.yml or model.gguf
+          quant_type: inferQuantType(modelConfig.name, modelConfig.model_path, modelId),
           providerId: this.provider,
           port: 0, // port is not known until the model is loaded
           sizeBytes: modelConfig.size_bytes ?? 0,
@@ -2790,7 +2806,26 @@ export default class llamacpp_extension extends AIEngine {
   }
 
   private async getRandomPort(): Promise<number> {
-    return 49152 + Math.floor(Math.random() * (65535 - 49152))
+    const min = 49152
+    const max = 65535
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const port = min + Math.floor(Math.random() * (max - min))
+      if (await this.portLooksFree(port)) return port
+    }
+    throw new Error('Unable to find a free local router port after 100 attempts')
+  }
+
+  private async portLooksFree(port: number): Promise<boolean> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 250)
+    try {
+      await fetch(`http://127.0.0.1:${port}/health`, { signal: controller.signal })
+      return false
+    } catch {
+      return true
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   private parseEnvFromString(
@@ -2817,18 +2852,19 @@ export default class llamacpp_extension extends AIEngine {
   override async load(
     modelId: string,
     _settings?: unknown,
-    isEmbedding: boolean = false
+    isEmbedding: boolean = false,
+    isReranking: boolean = false
   ): Promise<SessionInfo> {
     const sInfo = await this.findSessionByModel(modelId)
     if (sInfo) {
-      throw new Error('Model already loaded!!')
+      return sInfo
     }
 
     if (this.loadingModels.has(modelId)) {
       return this.loadingModels.get(modelId)!
     }
 
-    const loadingPromise = this.performLoad(modelId, isEmbedding)
+    const loadingPromise = this.performLoad(modelId, isEmbedding, isReranking)
     this.loadingModels.set(modelId, loadingPromise)
 
     try {
@@ -2851,7 +2887,8 @@ export default class llamacpp_extension extends AIEngine {
 
   private async performLoad(
     modelId: string,
-    isEmbedding: boolean = false
+    isEmbedding: boolean = false,
+    isReranking: boolean = false
   ): Promise<SessionInfo> {
     await this.ensureRouterReady()
     const router = await this.getRouterInfo()
@@ -2866,7 +2903,7 @@ export default class llamacpp_extension extends AIEngine {
     }
 
     try {
-      const info = await loadLlamaModel(modelId, isEmbedding)
+      const info = await loadLlamaModel(modelId, isEmbedding, isReranking)
       if (!isEmbedding) {
         this.loadedChatOrder = this.loadedChatOrder.filter((m) => m !== modelId)
         this.loadedChatOrder.push(modelId)
@@ -3331,7 +3368,7 @@ export default class llamacpp_extension extends AIEngine {
    */
   async updateModelSettings(
     modelId: string,
-    patch: Record<string, string | number | boolean | null | undefined>
+    patch: Record<string, string | number | boolean | string[] | Record<string, boolean> | null | undefined>
   ): Promise<void> {
     const configPath = await joinPath([
       await this.getProviderPath(),
@@ -3554,7 +3591,7 @@ export default class llamacpp_extension extends AIEngine {
             'https://huggingface.co/second-state/All-MiniLM-L6-v2-Embedding-GGUF/resolve/main/all-MiniLM-L6-v2-ggml-model-f16.gguf?download=true',
         })
       }
-      sInfo = await this.load(targetModelId, undefined, true)
+      sInfo = await this.load(targetModelId, undefined, true, true)
     }
 
     const ubatchSize =
@@ -3687,7 +3724,7 @@ export default class llamacpp_extension extends AIEngine {
     const cacheHit = !!sInfo
     if (!sInfo) {
       const loadStarted = performance.now()
-      sInfo = await this.load(targetModelId, undefined, true)
+      sInfo = await this.load(targetModelId, undefined, true, true)
       modelLoadMs = Math.round(performance.now() - loadStarted)
     }
 
