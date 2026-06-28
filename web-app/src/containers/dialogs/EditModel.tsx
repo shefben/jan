@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 
 import { useModelProvider } from '@/hooks/useModelProvider'
+import { useServiceHub } from '@/hooks/useServiceHub'
 import {
   IconPencil,
   IconEye,
@@ -45,6 +46,7 @@ export const DialogEditModel = ({
 }: DialogEditModelProps) => {
   const { t } = useTranslation()
   const { updateProvider } = useModelProvider()
+  const serviceHub = useServiceHub()
   const [selectedModelId, setSelectedModelId] = useState<string>('')
   const [displayName, setDisplayName] = useState<string>('')
   const [originalDisplayName, setOriginalDisplayName] = useState<string>('')
@@ -61,6 +63,7 @@ export const DialogEditModel = ({
     reasoning: false,
     web_search: false,
     embeddings: false,
+    reranking: false,
   })
   const [isAutoDetected, setIsAutoDetected] = useState(false)
 
@@ -88,7 +91,8 @@ export const DialogEditModel = ({
     video: capabilitiesList.includes('video'),
     reasoning: capabilitiesList.includes('reasoning'),
     web_search: capabilitiesList.includes('web_search'),
-    embeddings: capabilitiesList.includes('embeddings'),
+    embeddings: capabilitiesList.includes('embeddings') || capabilitiesList.includes('embedding'),
+    reranking: capabilitiesList.includes('rerank') || capabilitiesList.includes('reranking'),
   })
 
   // Initialize capabilities and display name from selected model
@@ -160,9 +164,13 @@ export const DialogEditModel = ({
       }
 
       if (capabilitiesChanged) {
-        modelUpdate.capabilities = Object.entries(capabilities)
+        modelUpdate.capabilities = Array.from(new Set(Object.entries(capabilities)
           .filter(([, isEnabled]) => isEnabled)
-          .map(([capName]) => capName)
+          .flatMap(([capName]) => {
+            if (capName === 'embeddings') return ['embedding', 'embeddings']
+            if (capName === 'reranking') return ['rerank', 'reranking']
+            return [capName]
+          })))
         modelUpdate._userConfiguredCapabilities = true
       }
 
@@ -176,6 +184,14 @@ export const DialogEditModel = ({
         ...provider,
         models: updatedModels,
       })
+
+      if (provider.provider === 'llamacpp' && capabilitiesChanged) {
+        await serviceHub.models().updateModelSettings(selectedModelId, {
+          capabilities: modelUpdate.capabilities,
+          embedding: capabilities.embeddings,
+          reranking: capabilities.reranking,
+        })
+      }
 
       // Update original values
       if (nameChanged) setOriginalDisplayName(displayName)
@@ -343,6 +359,17 @@ export const DialogEditModel = ({
                 <Switch id="embeddings-capability" checked={capabilities.embeddings} onCheckedChange={(checked) => handleCapabilityChange('embeddings', checked)} disabled={isLoading} />
               </div>
               {capabilities.embeddings && <div className="flex items-start gap-1.5 pl-6 text-xs text-muted-foreground"><IconInfoCircle size={12} className="mt-0.5 shrink-0" /><span>Enables semantic search/RAG tooling for this model.</span></div>}
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <IconCodeCircle2 className="size-4 text-muted-foreground" />
+                  <span className="text-sm">Reranking</span>
+                </div>
+                <Switch id="reranking-capability" checked={capabilities.reranking} onCheckedChange={(checked) => handleCapabilityChange('reranking', checked)} disabled={isLoading} />
+              </div>
+              {capabilities.reranking && <div className="flex items-start gap-1.5 pl-6 text-xs text-muted-foreground"><IconInfoCircle size={12} className="mt-0.5 shrink-0" /><span>Marks this model as a reranker and uses rank pooling for RAG reranking.</span></div>}
             </div>
 
             <div className="flex items-center justify-between">

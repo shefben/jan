@@ -494,7 +494,9 @@ export default class llamacpp_extension extends AIEngine {
     // then run configureBackends and restart the router only if the update
     // swapped the backend. On a fresh install (no backend yet) configureBackends
     // must run first to download one before the router can start.
-    this.backgroundInit = (async () => {
+    this.backgroundInit = new Promise<void>((resolve) => {
+      const runDeferredStartup = async () => {
+        try {
       if (await this.hasInstalledBackend()) {
         const before = this.config?.version_backend
         try {
@@ -532,7 +534,18 @@ export default class llamacpp_extension extends AIEngine {
           logger.error('Router failed to start during onLoad:', e)
         }
       }
-    })()
+    
+        } finally {
+          resolve()
+        }
+      }
+      const schedule = () => setTimeout(() => void runDeferredStartup(), 2000)
+      if (typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(schedule, { timeout: 5000 })
+      } else {
+        schedule()
+      }
+    })
   }
 
   // True when config.version_backend names a backend that's already downloaded,
@@ -3335,6 +3348,42 @@ export default class llamacpp_extension extends AIEngine {
 
     let touched = false
     for (const [sidebarKey, value] of Object.entries(patch)) {
+      if (sidebarKey === 'capabilities') {
+        const caps = Array.isArray(value)
+          ? value.map((v) => String(v))
+          : value && typeof value === 'object'
+            ? Object.entries(value as Record<string, unknown>).filter(([, enabled]) => enabled === true).map(([k]) => k)
+            : []
+        const capSet = new Set(caps)
+        if (capSet.has('embeddings')) capSet.add('embedding')
+        if (capSet.has('embedding')) capSet.add('embeddings')
+        if (capSet.has('reranking')) capSet.add('rerank')
+        if (capSet.has('rerank')) capSet.add('reranking')
+        ;(cfg as Record<string, unknown>).capabilities = Array.from(capSet)
+        ;(cfg as Record<string, unknown>).embedding = capSet.has('embedding') || capSet.has('embeddings')
+        ;(cfg as Record<string, unknown>).reranking = capSet.has('rerank') || capSet.has('reranking')
+        if ((cfg as Record<string, unknown>).reranking === true) {
+          ;(cfg as Record<string, unknown>).pooling = 'rank'
+          ;(cfg as Record<string, unknown>).embedding = true
+        }
+        touched = true
+        continue
+      }
+      if (sidebarKey === 'embedding' || sidebarKey === 'embeddings') {
+        ;(cfg as Record<string, unknown>).embedding = value === true || value === 'true'
+        touched = true
+        continue
+      }
+      if (sidebarKey === 'reranking' || sidebarKey === 'rerank') {
+        const enabled = value === true || value === 'true'
+        ;(cfg as Record<string, unknown>).reranking = enabled
+        if (enabled) {
+          ;(cfg as Record<string, unknown>).embedding = true
+          ;(cfg as Record<string, unknown>).pooling = 'rank'
+        }
+        touched = true
+        continue
+      }
       const m = MODEL_SETTINGS_YAML_MAPPING[sidebarKey]
       if (!m) continue
       const next = m.coerce(value)
@@ -3472,7 +3521,9 @@ export default class llamacpp_extension extends AIEngine {
     const hasMini = downloadedModelList.some(
       (m) => m.id === 'sentence-transformer-mini'
     )
-    let preferred = getDefaultEmbeddingModelId('llamacpp')
+    let preferred = typeof (this.config as LlamacppConfig & { embedding_model_id?: string }).embedding_model_id === 'string' && (this.config as LlamacppConfig & { embedding_model_id?: string }).embedding_model_id!.trim().length > 0
+      ? (this.config as LlamacppConfig & { embedding_model_id?: string }).embedding_model_id!.trim()
+      : getDefaultEmbeddingModelId('llamacpp')
 
     if (!preferred && installedEmbedding.length === 1 && !hasMini) {
       preferred = installedEmbedding[0].id
@@ -3572,8 +3623,12 @@ export default class llamacpp_extension extends AIEngine {
     ]
     const cp = entry.controllerProps as DropdownComponentProps & { value?: unknown; options?: unknown[] }
     const current = typeof cp.value === 'string' ? cp.value : 'auto'
+    const nextValue = options.some((o) => o.value === current) ? current : 'auto'
+    const oldOptions = JSON.stringify(cp.options ?? [])
+    const newOptions = JSON.stringify(options)
+    if (oldOptions === newOptions && cp.value === nextValue) return
     cp.options = options
-    if (!options.some((o) => o.value === current)) cp.value = 'auto'
+    cp.value = nextValue
     await writeSettingsFile(settings)
   }
 
@@ -3672,7 +3727,10 @@ export default class llamacpp_extension extends AIEngine {
     const loaded = new Set(await this.getLoadedModels().catch(() => [] as string[]))
     return {
       enabled: installed.length > 0,
-      selected_model: getDefaultRerankingModelId('llamacpp') ?? 'auto',
+      selected_model: (() => {
+        const value = (this.config as LlamacppConfig & { default_reranker_model?: string })?.default_reranker_model
+        return typeof value === 'string' && value.trim() && value.trim() !== '*' ? value.trim() : (getDefaultRerankingModelId('llamacpp') ?? 'auto')
+      })(),
       available_models: installed.map((m) => ({
         id: m.id,
         name: m.name,

@@ -768,16 +768,21 @@ pub(crate) fn parse_openai_messages(messages: &serde_json::Value) -> Result<Vec<
             .get("role")
             .and_then(|v| v.as_str())
             .ok_or("Each message must include a string 'role'")?;
-        let content = msg
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or("Each message must include 'content' as a string")?;
 
-        // Keep upstream format minimal and predictable.
-        out.push(serde_json::json!({
-            "role": role,
-            "content": content
-        }));
+        let mut out_msg = serde_json::Map::new();
+        out_msg.insert("role".to_string(), serde_json::Value::String(role.to_string()));
+        out_msg.insert(
+            "content".to_string(),
+            msg.get("content").cloned().unwrap_or(serde_json::Value::Null),
+        );
+
+        for key in ["name", "tool_call_id", "tool_calls"] {
+            if let Some(value) = msg.get(key) {
+                out_msg.insert(key.to_string(), value.clone());
+            }
+        }
+
+        out.push(serde_json::Value::Object(out_msg));
     }
     Ok(out)
 }
@@ -1614,7 +1619,8 @@ async fn proxy_request(
             };
             let (upstream_url, api_key) = if let Some(ext) = prepared.external.clone() {
                 let base = ext.base_url.trim_end_matches('/').to_string();
-                (format!("{base}/rerank"), ext.api_key)
+                let endpoint = if ext.endpoint_path.starts_with('/') { ext.endpoint_path } else { format!("/{}", ext.endpoint_path) };
+                (format!("{base}{endpoint}"), ext.api_key)
             } else if let Some((url, key)) = router_upstream(&llama_state, destination_path.as_str()).await {
                 (url, Some(key))
             } else {

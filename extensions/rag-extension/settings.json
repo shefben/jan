@@ -197,12 +197,18 @@
     "key": "reranking_model",
     "title": "RAG reranker model",
     "description": "Specific reranker model id to use when RAG reranking is set to Specific model. Use auto for automatic selection.",
-    "controllerType": "input",
+    "controllerType": "dropdown",
     "controllerProps": {
       "value": "auto",
       "placeholder": "auto or reranker model id",
       "type": "text",
-      "textAlign": "right"
+      "textAlign": "right",
+      "options": [
+        {
+          "value": "auto",
+          "name": "Auto"
+        }
+      ]
     }
   },
   {

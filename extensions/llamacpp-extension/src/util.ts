@@ -270,6 +270,8 @@ function hasExplicitRankPooling(
   for (const key of keys) {
     const raw = meta[key]
     if (typeof raw === 'string' && raw.toLowerCase().includes('rank')) return true
+    // llama.cpp pooling enum: RANK is currently represented as numeric 4.
+    if (typeof raw === 'number' && raw === 4) return true
   }
   return false
 }

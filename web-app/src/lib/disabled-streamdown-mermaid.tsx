@@ -20,7 +20,7 @@ export function DisabledMermaidFallback(props: MermaidFallbackProps) {
   const text = textFromProps(props)
   return (
     <pre className={props.className ?? 'whitespace-pre-wrap rounded-md border border-border/50 bg-muted/30 p-3 text-xs text-muted-foreground'}>
-      <code>{text || 'Mermaid diagram rendering is disabled to avoid a React update loop.'}</code>
+      <code>{text || 'Mermaid rendering is disabled to avoid a React update loop.'}</code>
     </pre>
   )
 }
@@ -40,7 +40,7 @@ export const MermaidBlock = DisabledMermaidFallback
 export const MermaidConfig = noop
 export const MermaidDiagram = DisabledMermaidFallback
 export const MermaidPlugin = identityPlugin
-export const MermaidProvider = DisabledMermaidFallback
+export const MermaidProvider = ({ children }: { children?: React.ReactNode }) => <>{children}</>
 export const MermaidRenderer = DisabledMermaidFallback
 export const createMermaidPlugin = identityPlugin
 export const createMermaidRenderer = identityPlugin

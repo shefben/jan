@@ -86,6 +86,7 @@ export const useMessages = create<MessageState>()((set, get) => ({
     })
   },
   deleteMessage: (threadId, messageId) => {
+    getThreadSearchIndex().invalidateThread(threadId)
     getServiceHub().messages().deleteMessage(threadId, messageId)
     set((state) => ({
       messages: {

@@ -71,3 +71,9 @@ llm-docs
 .claude/agents
 .claude
 CLAUDE.md
+.jan-*-tmp/
+.jan-final-local-ai-stack-manifest.txt
+apply-jan-*.py
+fix-jan-*.py
+patch-jan-*.py
+repair-jan-*.py

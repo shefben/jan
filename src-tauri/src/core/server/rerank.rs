@@ -15,6 +15,7 @@ pub struct RerankRuntimeConfig {
     pub model: Option<String>,
     pub fallback_chain: Option<Vec<String>>,
     pub external_base_url: Option<String>,
+    pub external_endpoint_path: Option<String>,
     pub external_api_key: Option<String>,
     pub external_model: Option<String>,
     pub allow_embedding_similarity_fallback: Option<bool>,
@@ -39,6 +40,7 @@ pub struct RerankModelCandidate {
 #[derive(Debug, Clone)]
 pub struct ExternalRerankTarget {
     pub base_url: String,
+    pub endpoint_path: String,
     pub api_key: Option<String>,
 }
 
@@ -335,6 +337,12 @@ pub async fn prepare_rerank_request(body_bytes: Bytes, jan_data_folder: &str, cl
                 kind: "external_reranker_not_configured".into(),
                 message: "Reranking mode is external, but external_base_url is missing in llamacpp/reranking.json".into(),
             })?;
+        let external_endpoint_path = cfg.external_endpoint_path
+            .clone()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(|s| if s.starts_with('/') { s } else { format!("/{s}") })
+            .unwrap_or_else(|| "/v1/rerank".to_string());
         let external_model = requested_model
             .clone()
             .or_else(|| cfg.external_model.clone())
@@ -402,6 +410,7 @@ pub async fn prepare_rerank_request(body_bytes: Bytes, jan_data_folder: &str, cl
             trace,
             external: Some(ExternalRerankTarget {
                 base_url: external_base,
+                endpoint_path: external_endpoint_path,
                 api_key: cfg.external_api_key.clone(),
             }),
         });

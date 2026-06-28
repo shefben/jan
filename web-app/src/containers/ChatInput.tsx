@@ -2228,7 +2228,7 @@ const ChatInput = memo(function ChatInput({
                   </Tooltip>
                 )}
 
-                {!effectiveAgentMode && selectedModel?.capabilities?.includes('web_search') && (
+                {!effectiveAgentMode && !effectiveAgentMode && effectiveCapabilities.includes('web_search') && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button

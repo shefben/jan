@@ -13,8 +13,8 @@ interface CorpusEntry {
   contentText: string
 }
 
-const MAX_CONTENT_CHARS = 5000
-const MAX_INDEXED_THREADS = 2000
+const MAX_CONTENT_CHARS = Number.MAX_SAFE_INTEGER
+const MAX_INDEXED_THREADS = 100000
 
 export function extractTextFromContent(content: ThreadContent[] | undefined): string {
   if (!content) return ''

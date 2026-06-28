@@ -35,6 +35,25 @@ export default class RagExtension extends RAGExtension {
     rerankEvidenceMode: 'off' as 'off' | 'top_n' | 'all',
   }
 
+  private rerankStatusCache: { at: number; enabled: boolean } | null = null
+
+  private async isLocalRerankingAvailable(): Promise<boolean> {
+    const now = Date.now()
+    if (this.rerankStatusCache && now - this.rerankStatusCache.at < 30000) {
+      return this.rerankStatusCache.enabled
+    }
+    try {
+      const llm = window.core?.extensionManager.getByName('@janhq/llamacpp-extension') as { getRerankStatus?: () => Promise<Record<string, unknown>> }
+      const status = await llm?.getRerankStatus?.()
+      const enabled = status?.enabled === true
+      this.rerankStatusCache = { at: now, enabled }
+      return enabled
+    } catch {
+      this.rerankStatusCache = { at: now, enabled: false }
+      return false
+    }
+  }
+
   async onLoad(): Promise<void> {
     try {
       await this.configure()
@@ -214,11 +233,14 @@ export default class RagExtension extends RAGExtension {
 
     const s = this.config
     const requestedTopK = (args['top_k'] as number) || s.retrievalLimit || 3
-    const shouldRerank = s.rerankingMode !== 'off'
+    let shouldRerank = s.rerankingMode !== 'off'
+    if (shouldRerank && s.rerankingMode === 'auto') {
+      shouldRerank = await this.isLocalRerankingAvailable()
+    }
     const multiplier = Math.max(1, Number(s.rerankCandidateMultiplier || 1))
-    const maxCandidates = Math.max(1, Number(s.rerankMaxCandidates || s.rerankTopKBefore || 40))
+    const maxCandidates = Math.max(requestedTopK, Number(s.rerankMaxCandidates || s.rerankTopKBefore || 40))
     const legacyBefore = Math.max(requestedTopK, Number(s.rerankTopKBefore || 0))
-    const multipliedBefore = Math.max(requestedTopK, requestedTopK * multiplier)
+    const multipliedBefore = Math.max(requestedTopK, Math.ceil(requestedTopK * multiplier))
     const topK = shouldRerank ? Math.min(maxCandidates, Math.max(legacyBefore, multipliedBefore)) : requestedTopK
     const threshold = shouldRerank ? Math.min(s.retrievalThreshold ?? 0.3, 0.05) : (s.retrievalThreshold ?? 0.3)
     const mode: 'auto' | 'ann' | 'linear' = s.searchMode || 'auto'

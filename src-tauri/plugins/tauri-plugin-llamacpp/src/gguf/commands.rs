@@ -39,7 +39,7 @@ pub async fn get_model_size(path: String) -> Result<u64, String> {
                 .parse::<u64>()
                 .map_err(|e| format!("Failed to parse content-length: {}", e))
         } else {
-            Ok(0)
+            Err("Remote model size is unknown: missing content-length header".to_string())
         }
     } else {
         // Handle local file using standard fs
@@ -125,7 +125,7 @@ pub async fn is_model_supported(
         false => system_info.total_memory * 1024 * 1024,
     };
 
-    // Calculate total VRAM from all GPUs
+    // Calculate the largest single-device VRAM pool. Summing all GPUs overstates fit unless split strategy is explicitly modeled.
     let total_vram: u64 = match system_info.gpus.is_empty() {
         true => {
             log::info!("No GPUs detected, using total RAM as VRAM");
@@ -135,7 +135,8 @@ pub async fn is_model_supported(
             .gpus
             .iter()
             .map(|g| g.total_memory * 1024 * 1024)
-            .sum::<u64>(),
+            .max()
+            .unwrap_or(0),
     };
 
     log::info!("Total VRAM reported/calculated (in bytes): {}", &total_vram);
