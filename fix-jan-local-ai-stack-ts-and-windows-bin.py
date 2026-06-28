@@ -1,0 +1,646 @@
+#!/usr/bin/env python3
+"""
+Post-patcher fixes for Jan local-AI stack.
+
+Run from the Jan repository root after apply-jan-final-local-ai-stack-v5.py.
+
+Fixes:
+- Python 3.9-compatible writing in this script itself
+- frontend TypeScript errors from the patcher
+- Windows Bun/UV download script noise:
+  * skips chmod for extensionless bun/uv on Windows
+  * ensures bun.exe / uv.exe and Tauri sidecar-suffixed .exe files exist
+"""
+
+from pathlib import Path
+import re
+import sys
+
+ROOT = Path.cwd()
+
+REQUIRED = [
+    "web-app/src/containers/ChatInput.tsx",
+    "web-app/src/containers/dialogs/SearchDialog.tsx",
+    "web-app/src/containers/ModelSetting.tsx",
+    "web-app/src/routes/settings/attachments.tsx",
+    "web-app/src/lib/search-index.ts",
+    "scripts/download-bin.mjs",
+]
+
+def fail(msg):
+    print("[fail] " + msg, file=sys.stderr)
+    sys.exit(1)
+
+def read(path):
+    p = ROOT / path
+    if not p.exists():
+        fail("Missing required file: " + path)
+    return p.read_text(encoding="utf-8")
+
+def write(path, text):
+    p = ROOT / path
+    with p.open("w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+    print("[ok] " + path)
+
+def remove_const_callback_block(text, name):
+    marker = "  const " + name + " = useCallback"
+    start = text.find(marker)
+    if start == -1:
+        return text
+
+    candidates = []
+    for token in ["\n  const ", "\n  function ", "\n  useEffect", "\n  //", "\n  return ("]:
+        pos = text.find(token, start + len(marker))
+        if pos != -1:
+            candidates.append(pos)
+
+    if not candidates:
+        return text
+
+    end = min(candidates)
+    removed = text[start:end]
+    if "useCallback" not in removed:
+        return text
+
+    return text[:start] + text[end:]
+
+def fix_chat_input():
+    path = "web-app/src/containers/ChatInput.tsx"
+    text = read(path)
+
+    for name in [
+        "handleWebSearchToggle",
+        "handleReasoningToggle",
+        "handleEmbeddingsToggle",
+    ]:
+        text = remove_const_callback_block(text, name)
+
+    write(path, text)
+
+SEARCH_DIALOG = """import { useEffect, useState, useMemo, useRef } from 'react'
+import { useNavigate } from '@tanstack/react-router'
+import { route } from '@/constants/routes'
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  IconSearch,
+  IconMessage,
+  IconHistory,
+  IconCirclePlus,
+  IconFolder,
+  IconLoader,
+} from '@tabler/icons-react'
+import { useThreads } from '@/hooks/useThreads'
+import { localStorageKey } from '@/constants/localStorage'
+import { useTranslation } from '@/i18n/react-i18next-compat'
+import { cn } from '@/lib/utils'
+import { VisuallyHidden } from '@radix-ui/react-visually-hidden'
+import {
+  getThreadSearchIndex,
+  type ThreadSearchResult,
+} from '@/lib/search-index'
+
+const MAX_RECENT_SEARCHES = 5
+
+interface SearchDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
+export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
+  const navigate = useNavigate()
+  const { t } = useTranslation()
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [recentVersion, setRecentVersion] = useState(0)
+  const [fullTextResults, setFullTextResults] = useState<ThreadSearchResult[]>([])
+  const [indexReady, setIndexReady] = useState(false)
+  const [indexBuilding, setIndexBuilding] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  const threads = useThreads((state) => state.threads)
+  const getFilteredThreads = useThreads((state) => state.getFilteredThreads)
+
+  useEffect(() => {
+    if (!open) return
+
+    const index = getThreadSearchIndex()
+    if (!index.hasPendingWork(threads)) {
+      setIndexReady(true)
+      setIndexBuilding(false)
+      return
+    }
+
+    setIndexReady(index.isReady)
+    setIndexBuilding(true)
+    index.build(threads).then(() => {
+      setIndexReady(true)
+      setIndexBuilding(false)
+    })
+  }, [open, threads])
+
+  useEffect(() => {
+    if (open) {
+      setSearchQuery('')
+      setSelectedIndex(0)
+      setFullTextResults([])
+      setTimeout(() => {
+        inputRef.current?.focus()
+      }, 0)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!searchQuery || !indexReady) {
+      setFullTextResults([])
+      return
+    }
+
+    clearTimeout(searchTimerRef.current)
+    searchTimerRef.current = setTimeout(() => {
+      const index = getThreadSearchIndex()
+      setFullTextResults(index.search(searchQuery))
+    }, 100)
+
+    return () => clearTimeout(searchTimerRef.current)
+  }, [searchQuery, indexReady, indexBuilding])
+
+  const recentSearches = useMemo(() => {
+    if (!open) return []
+
+    const stored = localStorage.getItem(localStorageKey.recentSearches)
+    if (!stored) return []
+
+    try {
+      const threadIds = JSON.parse(stored) as string[]
+      return threadIds
+        .map((id) => threads[id])
+        .filter((thread): thread is Thread => thread !== undefined)
+        .slice(0, MAX_RECENT_SEARCHES)
+    } catch {
+      return []
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, threads, recentVersion])
+
+  const handleClearRecent = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    localStorage.removeItem(localStorageKey.recentSearches)
+    setRecentVersion((v) => v + 1)
+  }
+
+  const handleClose = () => {
+    setSearchQuery('')
+    setFullTextResults([])
+    onOpenChange(false)
+  }
+
+  const handleSelectThread = (threadId: string) => {
+    const stored = localStorage.getItem(localStorageKey.recentSearches)
+    let threadIds: string[] = []
+
+    if (stored) {
+      try {
+        threadIds = JSON.parse(stored) as string[]
+      } catch {
+        threadIds = []
+      }
+    }
+
+    threadIds = threadIds.filter((id) => id !== threadId)
+    threadIds.unshift(threadId)
+    threadIds = threadIds.slice(0, MAX_RECENT_SEARCHES)
+
+    localStorage.setItem(
+      localStorageKey.recentSearches,
+      JSON.stringify(threadIds)
+    )
+
+    handleClose()
+    navigate({ to: route.threadsDetail, params: { threadId } })
+  }
+
+  const searchResults = useMemo(() => {
+    if (!searchQuery) return { withProject: [], withoutProject: [] }
+
+    const filteredThreads: Thread[] = indexReady
+      ? fullTextResults.map((result) => result.thread)
+      : getFilteredThreads(searchQuery)
+
+    const withProject: Array<{
+      thread: Thread
+      projectName: string
+      snippet?: string
+    }> = []
+    const withoutProject: Array<{
+      thread: Thread
+      snippet?: string
+    }> = []
+
+    filteredThreads.forEach((thread) => {
+      const fullTextResult = fullTextResults.find(
+        (result) => result.thread.id === thread.id
+      )
+      const snippet = fullTextResult?.snippet
+      const projectName = thread.metadata?.project?.name
+
+      if (projectName) {
+        withProject.push({ thread, projectName, snippet })
+      } else {
+        withoutProject.push({ thread, snippet })
+      }
+    })
+
+    return { withProject, withoutProject }
+  }, [searchQuery, fullTextResults, getFilteredThreads, indexReady])
+
+  const allItems = useMemo(() => {
+    const items: Array<{ type: 'new' | 'recent' | 'result'; id: string }> = []
+
+    if (!searchQuery) {
+      items.push({ type: 'new', id: 'new-chat' })
+      recentSearches.forEach((thread) => {
+        items.push({ type: 'recent', id: thread.id })
+      })
+    } else {
+      searchResults.withProject.forEach(({ thread }) => {
+        items.push({ type: 'result', id: thread.id })
+      })
+      searchResults.withoutProject.forEach(({ thread }) => {
+        items.push({ type: 'result', id: thread.id })
+      })
+    }
+
+    return items
+  }, [searchQuery, recentSearches, searchResults])
+
+  useEffect(() => {
+    setSelectedIndex(0)
+  }, [allItems.length])
+
+  useEffect(() => {
+    if (listRef.current) {
+      const selectedElement = listRef.current.querySelector(
+        `[data-index="${selectedIndex}"]`
+      )
+      selectedElement?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [selectedIndex])
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setSelectedIndex((prev) => Math.min(prev + 1, allItems.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setSelectedIndex((prev) => Math.max(prev - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      const selectedItem = allItems[selectedIndex]
+      if (selectedItem) {
+        if (selectedItem.type === 'new') {
+          handleStartNewChat()
+        } else {
+          handleSelectThread(selectedItem.id)
+        }
+      }
+    }
+  }
+
+  const handleStartNewChat = () => {
+    handleClose()
+    navigate({ to: '/' })
+  }
+
+  const showStartNewChat = !searchQuery
+  const hasResults =
+    searchResults.withProject.length > 0 ||
+    searchResults.withoutProject.length > 0
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="sm:max-w-xl p-0 gap-0 overflow-hidden"
+        showCloseButton={false}
+        aria-describedby={undefined}
+      >
+        <VisuallyHidden>
+          <DialogTitle>{t('common:search')}</DialogTitle>
+        </VisuallyHidden>
+
+        <div className="flex items-center border-b px-3">
+          <IconSearch className="size-4 text-muted-foreground shrink-0" />
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder={t('common:searchThreads')}
+            className="flex-1 h-12 px-3 bg-transparent placeholder:text-muted-foreground focus:outline-none"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+          {indexBuilding && (
+            <span
+              className="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0"
+              title="Indexing message content for full-text search"
+            >
+              <IconLoader className="size-3.5 animate-spin" />
+              <span className="hidden sm:inline">Indexing...</span>
+            </span>
+          )}
+        </div>
+
+        <div ref={listRef} className="max-h-80 overflow-y-auto px-1 py-2">
+          {searchQuery && !hasResults && indexBuilding && (
+            <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+              <IconLoader className="size-6 text-muted-foreground mb-2 animate-spin" />
+              <h3 className="text-base font-medium mb-1">
+                {t('common:searchIndexing')}
+              </h3>
+              <p className="text-xs leading-relaxed text-muted-foreground w-1/2 mx-auto">
+                {t('common:searchIndexingDesc')}
+              </p>
+            </div>
+          )}
+
+          {searchQuery && !hasResults && !indexBuilding && (
+            <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+              <IconSearch className="size-6 text-muted-foreground mb-2" />
+              <h3 className="text-base font-medium mb-1">
+                {t('common:noResultsFound')}
+              </h3>
+              <p className="text-xs leading-relaxed text-muted-foreground w-1/2 mx-auto">
+                {t('common:noResultsFoundDesc')}
+              </p>
+            </div>
+          )}
+
+          {showStartNewChat && (
+            <div className="p-1">
+              <button
+                data-index={0}
+                onClick={handleStartNewChat}
+                className={cn(
+                  'w-full flex items-center gap-2 px-3 py-2 rounded-md text-left hover:bg-secondary/60 transition-colors cursor-pointer',
+                  selectedIndex === 0 && 'bg-secondary/50'
+                )}
+              >
+                <IconCirclePlus className="size-4 text-muted-foreground" />
+                <span className="text-sm">{t('common:newChat')}</span>
+              </button>
+            </div>
+          )}
+
+          {!searchQuery && recentSearches.length > 0 && (
+            <div className="p-1">
+              <div className="px-3 pt-1.5 flex items-center justify-between mb-2">
+                <span className="text-xs font-medium text-muted-foreground">
+                  {t('common:recents')}
+                </span>
+                <button
+                  onClick={handleClearRecent}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                >
+                  {t('common:clearRecent')}
+                </button>
+              </div>
+              {recentSearches.map((thread, index) => {
+                const itemIndex = 1 + index
+                return (
+                  <button
+                    key={thread.id}
+                    data-index={itemIndex}
+                    onClick={() => handleSelectThread(thread.id)}
+                    className={cn(
+                      'w-full flex items-center gap-2 px-3 py-2 rounded-md text-left hover:bg-secondary/60 transition-colors cursor-pointer',
+                      selectedIndex === itemIndex && 'bg-secondary/50'
+                    )}
+                  >
+                    <IconHistory className="size-4 text-muted-foreground shrink-0" />
+                    <span className="text-sm truncate">{thread.title}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {searchQuery && searchResults.withProject.length > 0 && (
+            <div className="p-1">
+              {searchResults.withProject.map(({ thread, projectName, snippet }, index) => {
+                const itemIndex = index
+                return (
+                  <button
+                    key={thread.id}
+                    data-index={itemIndex}
+                    onClick={() => handleSelectThread(thread.id)}
+                    className={cn(
+                      'w-full flex items-center gap-2 px-3 py-2 rounded-md text-left hover:bg-secondary/60 transition-colors cursor-pointer',
+                      selectedIndex === itemIndex && 'bg-secondary/50'
+                    )}
+                  >
+                    <IconMessage className="size-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center min-w-0">
+                        <span className="text-xs text-muted-foreground flex items-center gap-1 shrink-0">
+                          <IconFolder className="size-3" />
+                          {projectName} -&nbsp;
+                        </span>
+                        <span className="text-sm truncate">{thread.title}</span>
+                      </div>
+                      {snippet && (
+                        <p className="text-xs text-muted-foreground/70 truncate mt-0.5">
+                          {snippet}
+                        </p>
+                      )}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {searchQuery && searchResults.withoutProject.length > 0 && (
+            <div className="p-1">
+              {searchResults.withoutProject.map(({ thread, snippet }, index) => {
+                const itemIndex = searchResults.withProject.length + index
+                return (
+                  <button
+                    key={thread.id}
+                    data-index={itemIndex}
+                    onClick={() => handleSelectThread(thread.id)}
+                    className={cn(
+                      'w-full flex flex-col gap-0.5 px-3 py-2 rounded-md text-left hover:bg-secondary/60 transition-colors cursor-pointer',
+                      selectedIndex === itemIndex && 'bg-secondary/50'
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <IconMessage className="size-4 text-muted-foreground shrink-0" />
+                      <span className="text-sm truncate">{thread.title}</span>
+                    </div>
+                    {snippet && (
+                      <p className="text-xs text-muted-foreground/70 truncate pl-6">
+                        {snippet}
+                      </p>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-3">
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-secondary/10 rounded text-[10px]">
+                ↑↓
+              </kbd>
+              {t('common:toNavigate')}
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-1.5 py-0.5 bg-secondary/10 rounded text-[10px]">
+                ↵
+              </kbd>
+              {t('common:toSelect')}
+            </span>
+          </div>
+          <span className="flex items-center gap-1">
+            <kbd className="px-1.5 py-0.5 bg-secondary/10 rounded text-[10px]">
+              esc
+            </kbd>
+            {t('common:toClose')}
+          </span>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+"""
+
+def fix_search_dialog():
+    write("web-app/src/containers/dialogs/SearchDialog.tsx", SEARCH_DIALOG)
+
+def fix_model_setting():
+    path = "web-app/src/containers/ModelSetting.tsx"
+    text = read(path)
+    text = text.replace("import { useCallback, useMemo } from 'react'\n", "")
+    text = text.replace('import { useCallback, useMemo } from "react"\n', "")
+
+    m = re.search(r"import \{([^}]+)\} from 'react'", text)
+    if m:
+        names = [x.strip() for x in m.group(1).split(",") if x.strip()]
+        for needed in ["useCallback", "useMemo"]:
+            if needed not in names:
+                names.insert(0, needed)
+        new_import = "import { " + ", ".join(dict.fromkeys(names)) + " } from 'react'"
+        text = text[:m.start()] + new_import + text[m.end():]
+
+    write(path, text)
+
+def fix_attachments():
+    path = "web-app/src/routes/settings/attachments.tsx"
+    text = read(path)
+    text = text.replace("return Number(d.controllerProps?.value ?? 0)", "return 0")
+    text = text.replace("return Number(d?.controllerProps?.value ?? 0)", "return 0")
+    write(path, text)
+
+WINDOWS_BIN_REPAIR = """
+  // Windows sidecar normalization for local builds.
+  // Tauri externalBin uses extensionless base names in tauri.windows.conf.json,
+  // but the actual Windows files must exist as bun.exe / uv.exe and as
+  // target-suffixed sidecars.
+  if (platform === 'win32') {
+    mkdirSync(binDir, { recursive: true })
+
+    const ensureWindowsExe = (name, candidates, suffixedName) => {
+      const baseDest = path.join(binDir, `${name}.exe`)
+      const suffixedDest = path.join(binDir, suffixedName)
+
+      if (!fs.existsSync(baseDest)) {
+        const src = candidates.find((candidate) => fs.existsSync(candidate))
+        if (src) {
+          fs.copyFileSync(src, baseDest)
+        }
+      }
+
+      if (fs.existsSync(baseDest) && !fs.existsSync(suffixedDest)) {
+        fs.copyFileSync(baseDest, suffixedDest)
+      }
+    }
+
+    ensureWindowsExe(
+      'bun',
+      [
+        path.join(tempBinDir, `bun-${bunPlatform}`, 'bun.exe'),
+        path.join(binDir, 'bun.exe'),
+      ],
+      'bun-x86_64-pc-windows-msvc.exe'
+    )
+
+    ensureWindowsExe(
+      'uv',
+      [
+        path.join(tempBinDir, 'uv.exe'),
+        path.join(tempBinDir, `uv-${uvPlatform}`, 'uv.exe'),
+        path.join(binDir, 'uv.exe'),
+      ],
+      'uv-x86_64-pc-windows-msvc.exe'
+    )
+  }
+"""
+
+def fix_download_bin():
+    path = "scripts/download-bin.mjs"
+    text = read(path)
+
+    # Guard the non-Windows chmod calls. The upstream script tries to chmod
+    # extensionless bun/uv after Windows extraction, producing ENOENT warnings.
+    text = text.replace(
+        "fs.chmod(path.join(binDir, 'bun'), 0o755, (err) => {",
+        "if (platform !== 'win32' && fs.existsSync(path.join(binDir, 'bun'))) fs.chmod(path.join(binDir, 'bun'), 0o755, (err) => {"
+    )
+    text = text.replace(
+        "fs.chmod(path.join(binDir, 'uv'), 0o755, (err) => {",
+        "if (platform !== 'win32' && fs.existsSync(path.join(binDir, 'uv'))) fs.chmod(path.join(binDir, 'uv'), 0o755, (err) => {"
+    )
+
+    if "Windows sidecar normalization for local builds" not in text:
+        marker = "  console.log('Downloads completed.')"
+        if marker not in text:
+            fail("Could not find download-bin completion marker")
+        text = text.replace(marker, WINDOWS_BIN_REPAIR + "\n" + marker)
+
+    write(path, text)
+
+def main():
+    missing = [path for path in REQUIRED if not (ROOT / path).exists()]
+    if missing:
+        fail("Run this from the Jan repository root. Missing: " + ", ".join(missing))
+
+    fix_chat_input()
+    fix_search_dialog()
+    fix_model_setting()
+    fix_attachments()
+    fix_download_bin()
+
+    print()
+    print("Post-patcher TypeScript and Windows Bun/UV fixes applied.")
+    print("Run:")
+    print("  yarn download:bin")
+    print("  yarn build:web")
+    print("  cargo check --manifest-path src-tauri/Cargo.toml")
+    print("  cargo check --manifest-path src-tauri/plugins/tauri-plugin-llamacpp/Cargo.toml")
+    print()
+    print("Note: do not change tauri.windows.conf.json externalBin to bun.exe/uv.exe.")
+    print("Tauri expects extensionless base names there, but the actual Windows files")
+    print("must exist as bun.exe/uv.exe plus target-suffixed .exe sidecars.")
+
+if __name__ == "__main__":
+    main()

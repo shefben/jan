@@ -193,7 +193,7 @@ async function main() {
       path.join(tempBinDir, `bun-${bunPlatform}`, 'bun'),
       path.join(binDir)
     )
-    fs.chmod(path.join(binDir, 'bun'), 0o755, (err) => {
+    if (platform !== 'win32' && fs.existsSync(path.join(binDir, 'bun'))) fs.chmod(path.join(binDir, 'bun'), 0o755, (err) => {
       if (err) {
         console.log('Add execution permission failed!', err)
       }
@@ -270,7 +270,7 @@ async function main() {
   }
   try {
     copySync(path.join(tempBinDir, `uv-${uvPlatform}`, 'uv'), path.join(binDir))
-    fs.chmod(path.join(binDir, 'uv'), 0o755, (err) => {
+    if (platform !== 'win32' && fs.existsSync(path.join(binDir, 'uv'))) fs.chmod(path.join(binDir, 'uv'), 0o755, (err) => {
       if (err) {
         console.log('Add execution permission failed!', err)
       }
@@ -391,6 +391,50 @@ async function main() {
     }
   } catch (err) {
     console.log('sqlite-vec download step failed (non-fatal):', err)
+  }
+
+
+  // Windows sidecar normalization for local builds.
+  // Tauri externalBin uses extensionless base names in tauri.windows.conf.json,
+  // but the actual Windows files must exist as bun.exe / uv.exe and as
+  // target-suffixed sidecars.
+  if (platform === 'win32') {
+    mkdirSync(binDir, { recursive: true })
+
+    const ensureWindowsExe = (name, candidates, suffixedName) => {
+      const baseDest = path.join(binDir, `${name}.exe`)
+      const suffixedDest = path.join(binDir, suffixedName)
+
+      if (!fs.existsSync(baseDest)) {
+        const src = candidates.find((candidate) => fs.existsSync(candidate))
+        if (src) {
+          fs.copyFileSync(src, baseDest)
+        }
+      }
+
+      if (fs.existsSync(baseDest) && !fs.existsSync(suffixedDest)) {
+        fs.copyFileSync(baseDest, suffixedDest)
+      }
+    }
+
+    ensureWindowsExe(
+      'bun',
+      [
+        path.join(tempBinDir, `bun-${bunPlatform}`, 'bun.exe'),
+        path.join(binDir, 'bun.exe'),
+      ],
+      'bun-x86_64-pc-windows-msvc.exe'
+    )
+
+    ensureWindowsExe(
+      'uv',
+      [
+        path.join(tempBinDir, 'uv.exe'),
+        path.join(tempBinDir, `uv-${uvPlatform}`, 'uv.exe'),
+        path.join(binDir, 'uv.exe'),
+      ],
+      'uv-x86_64-pc-windows-msvc.exe'
+    )
   }
 
   console.log('Downloads completed.')

@@ -49,12 +49,21 @@ import {
   buildEmbedBatches,
   mergeEmbedResponses,
   detectEmbeddingFromGgufMeta,
+  detectRerankingFromGgufMeta,
   detectMtpLayersFromGgufMeta,
   getDefaultEmbeddingModelId,
   setDefaultEmbeddingModelId,
+  getDefaultRerankingModelId,
+  setDefaultRerankingModelId,
   type EmbedBatchResult,
 } from './util'
 import { generatePreset, MTP_MIN_BUILD } from './preset'
+import {
+  normalizeRerankRequest,
+  postprocessRerankResponse,
+  scoreRerankingModel,
+  type RerankProfileName,
+} from './rerank'
 import { basename } from '@tauri-apps/api/path'
 import {
   loadLlamaModel,
@@ -74,11 +83,13 @@ import {
   removeOldBackendVersions,
   shouldMigrateBackend,
   handleSettingUpdate,
+  scoreHubModel,
 } from '@janhq/tauri-plugin-llamacpp-api'
 import { getSystemUsage, getSystemInfo } from '@janhq/tauri-plugin-hardware-api'
 
 const EMBEDDING_CHECK_VERSION = 3
 const MTP_CHECK_VERSION = 1
+const RERANKING_CHECK_VERSION = 1
 
 // Provider settings that end up in `router.preset.ini` (`[*]` global section
 // in preset.ts). Mutating any of these requires a router restart so the new
@@ -657,7 +668,7 @@ export default class llamacpp_extension extends AIEngine {
     const janDataFolderPath = await getJanDataFolderPath()
     const build = parseBuildNumber(version)
     const supportsMtp = build !== null && build >= MTP_MIN_BUILD
-    const { path: presetPath, embeddingCount } = await generatePreset(
+    const { path: presetPath, embeddingCount, rerankingCount } = await generatePreset(
       providerPath,
       janDataFolderPath,
       this.config,
@@ -688,8 +699,10 @@ export default class llamacpp_extension extends AIEngine {
     const userModelsMax = modelsMax
     this.userModelsMax = userModelsMax
     const embeddingSlotBonus = embeddingCount > 0 ? 1 : 0
-    if (modelsMax > 0 && embeddingSlotBonus > 0) {
-      modelsMax += embeddingSlotBonus
+    const rerankingSlotBonus = rerankingCount > 0 ? 1 : 0
+    const utilitySlotBonus = embeddingSlotBonus + rerankingSlotBonus
+    if (modelsMax > 0 && utilitySlotBonus > 0) {
+      modelsMax += utilitySlotBonus
     }
 
     // Defensive: if a router is already running (hot reload / dev), stop it
@@ -728,7 +741,7 @@ export default class llamacpp_extension extends AIEngine {
     this.routerPort = info.port
     this.routerApiKey = info.api_key
     logger.info(
-      `Router started on port ${info.port} (pid ${info.pid}, models_max=${modelsMax} [user=${userModelsMax}, +${embeddingSlotBonus} embedding, ${embeddingCount} installed], preset=${presetPath})`
+      `Router started on port ${info.port} (pid ${info.pid}, models_max=${modelsMax} [user=${userModelsMax}, +${embeddingSlotBonus} embedding, ${embeddingCount} installed, +${rerankingSlotBonus} reranking, ${rerankingCount} installed], preset=${presetPath})`
     )
   }
 
@@ -1777,7 +1790,12 @@ export default class llamacpp_extension extends AIEngine {
     })
 
     const isEmbedding = await this.resolveEmbeddingConfig(modelId, modelConfig)
+    const isReranking = await this.resolveRerankingConfig(modelId, modelConfig)
     await this.resolveMtpLayersConfig(modelId, modelConfig)
+
+    const capabilities: string[] = []
+    if (isEmbedding || isReranking) capabilities.push('embedding')
+    if (isReranking) capabilities.push('rerank')
 
     return {
       id: modelId,
@@ -1786,7 +1804,9 @@ export default class llamacpp_extension extends AIEngine {
       providerId: this.provider,
       port: 0, // port is not known until the model is loaded
       sizeBytes: modelConfig.size_bytes ?? 0,
-      embedding: isEmbedding,
+      embedding: isEmbedding || isReranking,
+      reranking: isReranking,
+      capabilities: capabilities.length > 0 ? capabilities : undefined,
     } as modelInfo
   }
 
@@ -1857,6 +1877,59 @@ export default class llamacpp_extension extends AIEngine {
     }
 
     return isEmbedding
+  }
+
+  private async resolveRerankingConfig(
+    modelId: string,
+    modelConfig: ModelConfig
+  ): Promise<boolean> {
+    const cfg = modelConfig as ModelConfig & {
+      reranking?: boolean
+      reranking_check_v?: number
+      capabilities?: { embedding?: boolean; rerank?: boolean; chat?: boolean }
+      pooling?: string
+      preferred_for?: string[]
+      score_normalization?: string
+      max_tokens_per_doc?: number
+      ubatch_size?: number
+      batch_size?: number
+    }
+
+    const hasFlag = typeof cfg.reranking === 'boolean' || cfg.capabilities?.rerank === true
+    const upToDate = cfg.reranking_check_v === RERANKING_CHECK_VERSION
+    if (hasFlag && upToDate) return cfg.reranking === true || cfg.capabilities?.rerank === true
+    if (cfg.reranking === true || cfg.capabilities?.rerank === true) return true
+
+    let isReranking = false
+    try {
+      const janDataFolderPath = await getJanDataFolderPath()
+      const fullModelPath = await joinPath([janDataFolderPath, modelConfig.model_path])
+      if (await fs.existsSync(fullModelPath)) {
+        const metadata = await readGgufMetadata(fullModelPath)
+        if (detectRerankingFromGgufMeta(metadata.metadata, modelId)) isReranking = true
+      }
+    } catch (e) {
+      logger.warn(`Failed to check reranking metadata for ${modelId}`, e)
+      return cfg.reranking === true || cfg.capabilities?.rerank === true
+    }
+
+    try {
+      const configPath = await joinPath([await this.getProviderPath(), 'models', modelId, 'model.yml'])
+      cfg.reranking = isReranking
+      cfg.reranking_check_v = RERANKING_CHECK_VERSION
+      cfg.capabilities = { ...(cfg.capabilities ?? {}), ...(isReranking ? { embedding: true, rerank: true } : {}) }
+      if (isReranking) {
+        cfg.embedding = true
+        cfg.pooling = 'rank'
+        if (!cfg.ubatch_size) cfg.ubatch_size = 2048
+        if (!cfg.batch_size) cfg.batch_size = 2048
+      }
+      await invoke<void>('write_yaml', { data: cfg, savePath: configPath })
+    } catch (e) {
+      logger.warn(`Failed to update reranking config for ${modelId}`, e)
+    }
+
+    return isReranking
   }
 
   private async resolveMtpLayersConfig(
@@ -1973,8 +2046,14 @@ export default class llamacpp_extension extends AIEngine {
           modelId,
           modelConfig
         )
+        const isReranking = await this.resolveRerankingConfig(
+          modelId,
+          modelConfig
+        )
 
         const capabilities: string[] = []
+        if (isEmbedding || isReranking) capabilities.push('embedding')
+        if (isReranking) capabilities.push('rerank')
         if (modelConfig.mmproj_path) {
           const caps = await this.readMmprojCapabilities(
             modelConfig.mmproj_path
@@ -2569,9 +2648,11 @@ export default class llamacpp_extension extends AIEngine {
       // A separate draft gguf is downloaded only to be used — enable MTP by
       // default. Embedded-MTP models keep MTP opt-in (no flag written here).
       ...(mtpModelPath ? { mtp_model_path: mtpModelPath, mtp: true } : {}),
-      ...(isEmbedding
-        ? { pooling: 'mean', ubatch_size: 2048, batch_size: 2048 }
-        : {}),
+      ...(isReranking
+        ? { pooling: 'rank', ubatch_size: 2048, batch_size: 2048, preferred_for: ['default'] }
+        : isEmbedding
+          ? { pooling: 'mean', ubatch_size: 2048, batch_size: 2048 }
+          : {}),
     } as ModelConfig
     await fs.mkdir(await joinPath([janDataFolderPath, modelDir]))
     await invoke<void>('write_yaml', {
@@ -3430,6 +3511,112 @@ export default class llamacpp_extension extends AIEngine {
     ) as EmbeddingResponse
   }
 
+  private async installedRerankingModels(): Promise<modelInfo[]> {
+    const downloadedModelList = await this.list()
+    return downloadedModelList.filter(
+      (m) =>
+        (m as any).reranking === true ||
+        (Array.isArray((m as any).capabilities) &&
+          (m as any).capabilities.includes('rerank'))
+    )
+  }
+
+  private async selectRerankingModel(req: ReturnType<typeof normalizeRerankRequest>): Promise<modelInfo> {
+    const installed = await this.installedRerankingModels()
+    const loadedIds = new Set(await this.getLoadedModels().catch(() => [] as string[]))
+    const explicitModel = req.model && req.model !== 'auto' ? req.model : undefined
+    const configuredDefault = (() => {
+      const value = (this.config as LlamacppConfig & { default_reranker_model?: string })?.default_reranker_model
+      if (typeof value !== 'string') return undefined
+      const trimmed = value.trim()
+      return trimmed && trimmed !== 'auto' && trimmed !== '*' ? trimmed : undefined
+    })()
+    const storedDefault = configuredDefault ?? getDefaultRerankingModelId('llamacpp')
+    const preferred = explicitModel ?? storedDefault
+
+    if (explicitModel) {
+      const match = installed.find((m) => m.id === explicitModel)
+      if (!match) throw new Error(`Requested reranking model "${explicitModel}" is not installed or is not marked reranking=true`)
+      return match
+    }
+
+    if (!storedDefault && installed.length === 1) {
+      setDefaultRerankingModelId('llamacpp', installed[0].id)
+      logger.info(`Auto-promoted "${installed[0].id}" as default reranking model (single installed reranker)`)
+    }
+
+    if (installed.length === 0) {
+      throw new Error('No reranking model is installed. Import a GGUF reranker or set reranking: true with pooling: rank in model.yml.')
+    }
+
+    const profile = req.profile as RerankProfileName
+    return installed
+      .map((m) => ({ model: m, score: scoreRerankingModel(m, profile, loadedIds, preferred) }))
+      .sort((a, b) => b.score - a.score)[0].model
+  }
+
+  async rerank(req: RerankRequest): Promise<RerankResponse> {
+    const started = performance.now()
+    const normalized = normalizeRerankRequest(req)
+    const model = await this.selectRerankingModel(normalized)
+    const targetModelId = model.id
+
+    let modelLoadMs = 0
+    let sInfo = await this.findSessionByModel(targetModelId)
+    const cacheHit = !!sInfo
+    if (!sInfo) {
+      const loadStarted = performance.now()
+      sInfo = await this.load(targetModelId, undefined, true)
+      modelLoadMs = Math.round(performance.now() - loadStarted)
+    }
+
+    const response = await fetch(`http://localhost:${sInfo.port}/v1/rerank`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${sInfo.api_key}`,
+      },
+      body: JSON.stringify({
+        ...req,
+        model: targetModelId,
+        documents: normalized.documents,
+        top_n: normalized.top_n,
+        return_documents: false,
+      }),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null)
+      throw new Error(`Rerank request failed with status ${response.status}: ${JSON.stringify(errorData)}`)
+    }
+
+    const raw = await response.json()
+    return postprocessRerankResponse(raw, normalized, {
+      model: targetModelId,
+      provider: 'local_gguf',
+      fallback_used: false,
+      latency_ms: Math.round(performance.now() - started),
+      model_load_ms: modelLoadMs,
+      cache_hit: cacheHit,
+    }) as RerankResponse
+  }
+
+  async getRerankStatus(): Promise<Record<string, unknown>> {
+    const installed = await this.installedRerankingModels()
+    const loaded = new Set(await this.getLoadedModels().catch(() => [] as string[]))
+    return {
+      enabled: installed.length > 0,
+      selected_model: getDefaultRerankingModelId('llamacpp') ?? 'auto',
+      available_models: installed.map((m) => ({
+        id: m.id,
+        name: m.name,
+        loaded: loaded.has(m.id),
+        sizeBytes: m.sizeBytes,
+        capabilities: (m as any).capabilities,
+      })),
+    }
+  }
+
   /**
    * Check if a tool is supported by the model
    * Currently read from GGUF chat_template
@@ -3473,6 +3660,15 @@ export default class llamacpp_extension extends AIEngine {
     try {
       const result = await isModelSupported(path, Number(ctxSize))
       return result
+    } catch (e) {
+      throw new Error(String(e))
+    }
+  }
+
+
+  async getHubModelScore(request: any): Promise<any> {
+    try {
+      return await scoreHubModel(request)
     } catch (e) {
       throw new Error(String(e))
     }

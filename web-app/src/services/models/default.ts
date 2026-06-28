@@ -3,6 +3,7 @@
  */
 
 import { sanitizeModelId } from '@/lib/utils'
+import { inferGgufQuantization, selectBestGgufVariant } from '@/lib/modelQuantization'
 import {
   AIEngine,
   EngineManager,
@@ -22,6 +23,9 @@ import type {
   HuggingFaceRepo,
   CatalogModel,
   ModelValidationResult,
+  ModelQuant,
+  ModelScore,
+  HubScoreRequestSource,
 } from './types'
 import {
   extractToolContextFromContent,
@@ -193,6 +197,7 @@ export class DefaultModelsService implements ModelsService {
         model_id: sanitizeModelId(modelId),
         path: `https://huggingface.co/${repo.modelId}/resolve/main/${file.rfilename}`,
         file_size: formatFileSize(file.size),
+        size_bytes: file.size,
         sha256: file.lfs?.sha256,
       }
     })
@@ -665,6 +670,118 @@ export class DefaultModelsService implements ModelsService {
     } catch (error) {
       console.error(`Error checking model support for ${modelPath}:`, error)
       return 'GREY' // Error state, assume not supported
+    }
+  }
+
+
+  async getHubModelScore(
+    model: CatalogModel,
+    variant?: ModelQuant,
+    ctxSize = 8192
+  ): Promise<ModelScore> {
+    try {
+      const engine = this.getEngine('llamacpp') as AIEngine & {
+        getHubModelScore?: (request: {
+          model_name: string
+          developer?: string
+          model_path: string
+          runtime?: 'llamacpp' | 'mlx'
+          quantization?: string
+          total_size_bytes?: number
+          ctx_size?: number
+          use_case?: string
+          capabilities?: string[]
+          release_date?: string
+          tools?: boolean
+          num_mmproj?: number
+          pinned?: boolean
+        }) => Promise<ModelScore>
+      }
+
+      let scoreSource: HubScoreRequestSource | undefined
+
+      if (model.is_mlx) {
+        const safetensorsFiles = model.safetensors_files ?? []
+        let primaryFile = safetensorsFiles[0]
+        if (!primaryFile) {
+          primaryFile = { model_id: '', path: '', file_size: '' }
+        }
+        const totalSizeBytes = safetensorsFiles.reduce(
+          (sum, file) => sum + (file.size_bytes ?? 0),
+          0
+        )
+        const combined = [
+          model.model_name,
+          model.developer,
+          ...safetensorsFiles.map((file) => file.model_id),
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+        scoreSource = {
+          model_id: primaryFile.model_id,
+          path: primaryFile.path,
+          file_size: primaryFile.file_size,
+          runtime: 'mlx',
+          quantization:
+            combined.includes('8bit') || combined.includes('mlx-8bit')
+              ? 'mlx-8bit'
+              : 'mlx-4bit',
+          total_size_bytes: totalSizeBytes > 0 ? totalSizeBytes : undefined,
+        }
+      } else {
+        const scoreVariant = variant ?? selectBestGgufVariant(model.quants)
+        scoreSource = scoreVariant
+          ? {
+              ...scoreVariant,
+              runtime: 'llamacpp',
+              quantization: inferGgufQuantization(
+                `${scoreVariant.model_id} ${scoreVariant.path}`
+              ),
+            }
+          : undefined
+      }
+
+      if (!scoreSource) {
+        return {
+          status: 'unavailable',
+          estimated_tps: 0,
+          reason: model.is_mlx
+            ? 'No MLX safetensors variant available for scoring.'
+            : 'No GGUF variant available for scoring.',
+        }
+      }
+
+      if (engine && typeof engine.getHubModelScore === 'function') {
+        return await engine.getHubModelScore({
+          model_name: model.model_name,
+          developer: model.developer,
+          model_path: scoreSource.path,
+          runtime: scoreSource.runtime,
+          quantization: scoreSource.quantization,
+          total_size_bytes: scoreSource.total_size_bytes,
+          ctx_size: ctxSize,
+          use_case: model.use_case,
+          capabilities: model.capabilities,
+          release_date: model.created_at ?? model.createdAt,
+          tools: model.tools,
+          num_mmproj: model.num_mmproj,
+          pinned: model.pinned,
+        })
+      }
+
+      return {
+        status: 'unavailable',
+        estimated_tps: 0,
+        reason: 'Hub scoring is not available on this platform.',
+      }
+    } catch (error) {
+      console.error(`Error scoring model ${model.model_name}:`, error)
+      return {
+        status: 'unavailable',
+        estimated_tps: 0,
+        reason: error instanceof Error ? error.message : 'Hub scoring failed.',
+      }
     }
   }
 

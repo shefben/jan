@@ -27,7 +27,9 @@
         "summary": "List loaded models",
         "description": "Returns information about the loaded model(s). The list always contains a single element describing the current model. See the OpenAI *Models* API documentation for details.",
         "operationId": "listModels",
-        "tags": ["Models"],
+        "tags": [
+          "Models"
+        ],
         "responses": {
           "200": {
             "description": "A list containing a single model object",
@@ -45,9 +47,11 @@
     "/chat/completions": {
       "post": {
         "summary": "Create chat completion",
-        "description": "Generates a completion for the supplied prompt. Streaming mode is supported. All extra options described in the documentation are optional and follow the OpenAI‑compatible naming.",
+        "description": "Generates a completion for the supplied prompt. Streaming mode is supported. All extra options described in the documentation are optional and follow the OpenAI\u2011compatible naming.",
         "operationId": "createChatCompletion",
-        "tags": ["Inference"],
+        "tags": [
+          "Inference"
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -58,7 +62,10 @@
               "example": {
                 "model": "janhq/Jan-v3-4b-base-instruct-Q4_K_XL",
                 "messages": [
-                  {"role": "user", "content": "Hello!"}
+                  {
+                    "role": "user",
+                    "content": "Hello!"
+                  }
                 ]
               }
             }
@@ -83,7 +90,9 @@
         "summary": "Create a message",
         "description": "Generates a response based on input messages. Streaming mode is supported. This endpoint follows the Anthropic Messages API specification and is compatible with Claude models.",
         "operationId": "createMessage",
-        "tags": ["Inference"],
+        "tags": [
+          "Inference"
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -94,7 +103,10 @@
               "example": {
                 "model": "janhq/Jan-v3-4b-base-instruct-Q4_K_XL",
                 "messages": [
-                  {"role": "user", "content": "Hello!"}
+                  {
+                    "role": "user",
+                    "content": "Hello!"
+                  }
                 ]
               }
             }
@@ -119,7 +131,9 @@
         "summary": "Run headless assistant orchestration with tool execution",
         "description": "Optionally loads assistant settings by `assistant_id`, executes server-side MCP tool calls, and continues generation until the model returns a final response.",
         "operationId": "createOrchestration",
-        "tags": ["Inference"],
+        "tags": [
+          "Inference"
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -127,24 +141,56 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "assistant_id": { "type": "string", "description": "Optional assistant id to load system prompt/model hint from" },
-                  "project_id": { "type": "string", "nullable": true, "description": "Reserved for future parity; MCP-only execution currently" },
-                  "model": { "type": "string", "description": "Optional model override. If omitted, uses assistant's model hint or the first running local model." },
+                  "assistant_id": {
+                    "type": "string",
+                    "description": "Optional assistant id to load system prompt/model hint from"
+                  },
+                  "project_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Reserved for future parity; MCP-only execution currently"
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "Optional model override. If omitted, uses assistant's model hint or the first running local model."
+                  },
                   "messages": {
                     "type": "array",
                     "items": {
                       "type": "object",
                       "properties": {
-                        "role": { "type": "string", "enum": ["system", "user", "assistant"] },
-                        "content": { "type": "string" }
+                        "role": {
+                          "type": "string",
+                          "enum": [
+                            "system",
+                            "user",
+                            "assistant"
+                          ]
+                        },
+                        "content": {
+                          "type": "string"
+                        }
                       },
-                      "required": ["role", "content"]
+                      "required": [
+                        "role",
+                        "content"
+                      ]
                     }
                   },
-                  "stream": { "type": "boolean", "default": false, "description": "Streaming is not supported for this endpoint." },
-                  "max_turns": { "type": "integer", "default": 8, "description": "Maximum tool-calling turns before giving up." }
+                  "stream": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Streaming is not supported for this endpoint."
+                  },
+                  "max_turns": {
+                    "type": "integer",
+                    "default": 8,
+                    "description": "Maximum tool-calling turns before giving up."
+                  }
                 },
-                "required": ["messages"]
+                "required": [
+                  "messages"
+                ]
               }
             }
           }
@@ -154,7 +200,209 @@
             "description": "Completion result",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ChatCompletionResponseDto" }
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletionResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/rerank": {
+      "post": {
+        "summary": "Rerank documents",
+        "description": "Scores documents for relevance to a query using a local reranker model. Accepts documents or texts; model may be auto.",
+        "operationId": "createRerank",
+        "tags": [
+          "Inference"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerankRequestDto"
+              },
+              "example": {
+                "model": "auto",
+                "query": "what is rank pooling?",
+                "documents": [
+                  "Rank pooling scores query-document pairs.",
+                  "Bananas are yellow."
+                ],
+                "top_n": 2,
+                "return_documents": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rerank result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerankResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid rerank request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No local reranker is available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/reranking": {
+      "post": {
+        "summary": "Rerank documents",
+        "description": "Scores documents for relevance to a query using a local reranker model. Accepts documents or texts; model may be auto.",
+        "operationId": "createRerank",
+        "tags": [
+          "Inference"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerankRequestDto"
+              },
+              "example": {
+                "model": "auto",
+                "query": "what is rank pooling?",
+                "documents": [
+                  "Rank pooling scores query-document pairs.",
+                  "Bananas are yellow."
+                ],
+                "top_n": 2,
+                "return_documents": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rerank result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerankResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid rerank request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No local reranker is available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/available": {
+      "get": {
+        "summary": "List available local models",
+        "operationId": "listAvailableModels",
+        "tags": [
+          "Models"
+        ],
+        "responses": {
+          "200": {
+            "description": "Available local models"
+          }
+        }
+      }
+    },
+    "/models/load": {
+      "post": {
+        "summary": "Load a local model through the llama.cpp router",
+        "operationId": "loadModel",
+        "tags": [
+          "Models"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelLifecycleRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Model lifecycle response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelLifecycleResponseDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/models/unload": {
+      "post": {
+        "summary": "Unload or evict a local model",
+        "operationId": "unloadModel",
+        "tags": [
+          "Models"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelLifecycleRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Model lifecycle response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelLifecycleResponseDto"
+                }
               }
             }
           }
@@ -186,11 +434,13 @@
           },
           "object": {
             "type": "string",
-            "enum": ["model"]
+            "enum": [
+              "model"
+            ]
           },
           "name": {
             "type": "string",
-            "description": "Human‑readable name of the model."
+            "description": "Human\u2011readable name of the model."
           },
           "version": {
             "type": "string",
@@ -219,7 +469,7 @@
           },
           "top_p": {
             "type": "number",
-            "description": "Default nucleus‑sampling probability."
+            "description": "Default nucleus\u2011sampling probability."
           },
           "stream": {
             "type": "boolean",
@@ -289,11 +539,13 @@
       },
       "ListModelsResponseDto": {
         "type": "object",
-        "description": "Response for `GET /v1/models` – a list that always contains a single model entry.",
+        "description": "Response for `GET /v1/models` \u2013 a list that always contains a single model entry.",
         "properties": {
           "object": {
             "type": "string",
-            "enum": ["list"]
+            "enum": [
+              "list"
+            ]
           },
           "data": {
             "type": "array",
@@ -302,7 +554,10 @@
             }
           }
         },
-        "required": ["object", "data"]
+        "required": [
+          "object",
+          "data"
+        ]
       },
       "CreateChatCompletionDto": {
         "type": "object",
@@ -330,7 +585,7 @@
           },
           "stop": {
             "type": "array",
-            "description": "Stop sequences – generation stops before emitting any of these strings.",
+            "description": "Stop sequences \u2013 generation stops before emitting any of these strings.",
             "items": {
               "type": "string"
             },
@@ -343,12 +598,12 @@
           },
           "dynatemp_range": {
             "type": "number",
-            "description": "Dynamic‑temperature range – final temperature is sampled from `[temperature‑range, temperature+range]`.",
+            "description": "Dynamic\u2011temperature range \u2013 final temperature is sampled from `[temperature\u2011range, temperature+range]`.",
             "default": 0
           },
           "dynatemp_exponent": {
             "type": "number",
-            "description": "Exponent for dynamic‑temperature scaling.",
+            "description": "Exponent for dynamic\u2011temperature scaling.",
             "default": 1
           },
           "top_k": {
@@ -408,7 +663,7 @@
           },
           "dry_multiplier": {
             "type": "number",
-            "description": "DRY (Don’t Repeat Yourself) multiplier (0.0 = disabled).",
+            "description": "DRY (Don\u2019t Repeat Yourself) multiplier (0.0 = disabled).",
             "default": 0
           },
           "dry_base": {
@@ -432,7 +687,12 @@
             "items": {
               "type": "string"
             },
-            "default": ["\\n", ":", "\"", "*"]
+            "default": [
+              "\\n",
+              ":",
+              "\"",
+              "*"
+            ]
           },
           "xtc_probability": {
             "type": "number",
@@ -461,11 +721,11 @@
           },
           "grammar": {
             "type": "string",
-            "description": "Grammar for grammar‑based sampling."
+            "description": "Grammar for grammar\u2011based sampling."
           },
           "json_schema": {
             "type": "object",
-            "description": "JSON schema for grammar‑based sampling."
+            "description": "JSON schema for grammar\u2011based sampling."
           },
           "seed": {
             "type": "integer",
@@ -545,12 +805,12 @@
           },
           "return_progress": {
             "type": "boolean",
-            "description": "Include prompt‑processing progress when streaming.",
+            "description": "Include prompt\u2011processing progress when streaming.",
             "default": false
           },
           "post_sampling_probs": {
             "type": "boolean",
-            "description": "Return top‑N probabilities *after* sampling.",
+            "description": "Return top\u2011N probabilities *after* sampling.",
             "default": false
           },
           "response_fields": {
@@ -573,18 +833,24 @@
                   "type": "number"
                 }
               },
-              "required": ["id", "scale"]
+              "required": [
+                "id",
+                "scale"
+              ]
             }
           },
           "multimodal_data": {
             "type": "array",
-            "description": "Base64‑encoded multimodal data (images, audio, …). Must match the number of `<__media__>` markers in the prompt.",
+            "description": "Base64\u2011encoded multimodal data (images, audio, \u2026). Must match the number of `<__media__>` markers in the prompt.",
             "items": {
               "type": "string"
             }
           }
         },
-        "required": ["model", "messages"]
+        "required": [
+          "model",
+          "messages"
+        ]
       },
       "CreateMessageDto": {
         "type": "object",
@@ -627,7 +893,7 @@
           },
           "stop_sequences": {
             "type": "array",
-            "description": "Stop sequences – generation stops before emitting any of these strings.",
+            "description": "Stop sequences \u2013 generation stops before emitting any of these strings.",
             "items": {
               "type": "string"
             },
@@ -656,7 +922,11 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["auto", "any", "tool"],
+                "enum": [
+                  "auto",
+                  "any",
+                  "tool"
+                ],
                 "description": "How the model chooses which tool to call."
               },
               "name": {
@@ -683,7 +953,10 @@
             }
           }
         },
-        "required": ["model", "messages"]
+        "required": [
+          "model",
+          "messages"
+        ]
       },
       "AnthropicMessage": {
         "type": "object",
@@ -691,7 +964,11 @@
         "properties": {
           "role": {
             "type": "string",
-            "enum": ["user", "assistant", "system"],
+            "enum": [
+              "user",
+              "assistant",
+              "system"
+            ],
             "description": "The role of the message sender."
           },
           "content": {
@@ -724,7 +1001,10 @@
             "$ref": "#/components/schemas/ToolUse"
           }
         },
-        "required": ["role", "content"]
+        "required": [
+          "role",
+          "content"
+        ]
       },
       "ContentBlock": {
         "type": "object",
@@ -732,7 +1012,10 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["text", "image"],
+            "enum": [
+              "text",
+              "image"
+            ],
             "description": "The type of content block."
           },
           "text": {
@@ -745,7 +1028,9 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["base64"]
+                "enum": [
+                  "base64"
+                ]
               },
               "media_type": {
                 "type": "string",
@@ -756,10 +1041,16 @@
                 "description": "Base64-encoded image data."
               }
             },
-            "required": ["type", "media_type", "data"]
+            "required": [
+              "type",
+              "media_type",
+              "data"
+            ]
           }
         },
-        "required": ["type"]
+        "required": [
+          "type"
+        ]
       },
       "Tool": {
         "type": "object",
@@ -778,7 +1069,11 @@
             "description": "JSON schema defining the tool's input parameters."
           }
         },
-        "required": ["name", "description", "input_schema"]
+        "required": [
+          "name",
+          "description",
+          "input_schema"
+        ]
       },
       "ToolUse": {
         "type": "object",
@@ -797,7 +1092,11 @@
             "description": "The arguments for the tool."
           }
         },
-        "required": ["id", "name", "input"]
+        "required": [
+          "id",
+          "name",
+          "input"
+        ]
       },
       "MessageUsage": {
         "type": "object",
@@ -812,7 +1111,10 @@
             "description": "Number of tokens in the output."
           }
         },
-        "required": ["input_tokens", "output_tokens"]
+        "required": [
+          "input_tokens",
+          "output_tokens"
+        ]
       },
       "MessageResponseDto": {
         "type": "object",
@@ -824,12 +1126,16 @@
           },
           "type": {
             "type": "string",
-            "enum": ["message"],
+            "enum": [
+              "message"
+            ],
             "description": "The type of the response."
           },
           "role": {
             "type": "string",
-            "enum": ["assistant"],
+            "enum": [
+              "assistant"
+            ],
             "description": "The role of the assistant."
           },
           "content": {
@@ -863,7 +1169,15 @@
             "description": "Optional billing information."
           }
         },
-        "required": ["id", "type", "role", "content", "stop_reason", "usage", "model"]
+        "required": [
+          "id",
+          "type",
+          "role",
+          "content",
+          "stop_reason",
+          "usage",
+          "model"
+        ]
       },
       "ChatCompletionResponseDto": {
         "type": "object",
@@ -875,7 +1189,9 @@
           },
           "object": {
             "type": "string",
-            "enum": ["chat.completion"]
+            "enum": [
+              "chat.completion"
+            ]
           },
           "created": {
             "type": "integer",
@@ -920,7 +1236,14 @@
             "description": "Number of tokens evaluated in total from the prompt."
           }
         },
-        "required": ["id", "object", "created", "model", "choices", "usage"]
+        "required": [
+          "id",
+          "object",
+          "created",
+          "model",
+          "choices",
+          "usage"
+        ]
       },
       "ChatCompletionMessage": {
         "type": "object",
@@ -928,7 +1251,11 @@
         "properties": {
           "role": {
             "type": "string",
-            "enum": ["system", "assistant", "user"],
+            "enum": [
+              "system",
+              "assistant",
+              "user"
+            ],
             "description": "Who sent the message."
           },
           "content": {
@@ -936,7 +1263,10 @@
             "description": "The textual content of the message."
           }
         },
-        "required": ["role", "content"]
+        "required": [
+          "role",
+          "content"
+        ]
       },
       "ChoiceDto": {
         "type": "object",
@@ -960,7 +1290,11 @@
             "nullable": true
           }
         },
-        "required": ["index", "message", "finish_reason"]
+        "required": [
+          "index",
+          "message",
+          "finish_reason"
+        ]
       },
       "UsageDto": {
         "type": "object",
@@ -976,7 +1310,11 @@
             "type": "integer"
           }
         },
-        "required": ["prompt_tokens", "completion_tokens", "total_tokens"]
+        "required": [
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens"
+        ]
       },
       "LogprobContent": {
         "type": "object",
@@ -1045,6 +1383,194 @@
             "items": {
               "$ref": "#/components/schemas/LogprobContent"
             }
+          }
+        }
+      },
+      "RerankDocumentDto": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "additionalProperties": true
+          }
+        ]
+      },
+      "RerankRequestDto": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string",
+            "default": "auto"
+          },
+          "query": {
+            "type": "string"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RerankDocumentDto"
+            }
+          },
+          "texts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RerankDocumentDto"
+            },
+            "description": "Alias for documents."
+          },
+          "top_n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "top_k": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Alias for top_n."
+          },
+          "return_documents": {
+            "type": "boolean",
+            "default": true
+          },
+          "normalize": {
+            "type": "boolean",
+            "default": true
+          },
+          "max_tokens_per_doc": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "evidence_mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "top_n",
+              "all"
+            ],
+            "default": "off"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "RerankResultDto": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "relevance_score": {
+            "type": "number"
+          },
+          "document": {
+            "$ref": "#/components/schemas/RerankDocumentDto"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "contribution": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "relevance_score"
+        ]
+      },
+      "RerankResponseDto": {
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string",
+            "default": "list"
+          },
+          "model": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RerankResultDto"
+            }
+          },
+          "usage": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "results"
+        ]
+      },
+      "ErrorResponseDto": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "ModelLifecycleRequestDto": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "model"
+        ]
+      },
+      "ModelLifecycleResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
           }
         }
       }

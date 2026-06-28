@@ -39,6 +39,8 @@ import { encodeVideoSentinel, parseVideoDataUrl } from '@/lib/video-sentinel'
 import { extractFilesFromPrompt, type FileMetadata } from '@/lib/fileMetadata'
 import { isPredefinedRemoteProvider, getProviderApiType } from '@/lib/providerCaps'
 import { paramsSettings } from '@/lib/predefinedParams'
+import type { CapabilityToggles } from '@/stores/capability-toggles-store'
+import { DEFAULT_CAPABILITY_TOGGLES } from '@/stores/capability-toggles-store'
 
 export type TokenUsageCallback = (
   usage: LanguageModelUsage,
@@ -503,6 +505,33 @@ export function buildLlamacppReasoningParams(
   }
 }
 
+
+function supportsLooseProviderExtras(providerName: string | null | undefined, modelId: string | undefined): boolean {
+  const p = String(providerName ?? '').toLowerCase()
+  const m = String(modelId ?? '').toLowerCase()
+  if (['openai', 'anthropic', 'google', 'gemini', 'xai'].includes(p)) return false
+  return p.includes('perplexity') || m.includes('sonar') || m.includes('perplexity')
+}
+
+function buildCapabilityRequestParams(
+  providerName: string | null | undefined,
+  modelId: string | undefined,
+  toggles: CapabilityToggles
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (toggles.reasoning) {
+    if (providerName === 'anthropic') {
+      out.thinking = { type: 'enabled', budget_tokens: 4096 }
+    } else if (providerName === 'llamacpp') {
+      out.chat_template_kwargs = { enable_thinking: true }
+    }
+  }
+  if (toggles.webSearch && supportsLooseProviderExtras(providerName, modelId)) {
+    out.web_search = true
+  }
+  return out
+}
+
 function extractLatestUserText(messages: UIMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
@@ -565,6 +594,7 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
   private hasDocuments = false
   private modelSupportsTools = false
   private ragFeatureAvailable = false
+  private capabilityToggles: CapabilityToggles = DEFAULT_CAPABILITY_TOGGLES
   private systemMessage?: string
   private serviceHub: ServiceHub | null
   private threadId?: string
@@ -591,6 +621,10 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
 
   updateSystemMessage(systemMessage: string | undefined) {
     this.systemMessage = systemMessage
+  }
+
+  setCapabilityToggles(toggles: CapabilityToggles | undefined) {
+    this.capabilityToggles = { ...DEFAULT_CAPABILITY_TOGGLES, ...(toggles ?? {}) }
   }
 
   // Inference params follow the thread's assigned assistant so in-chat agent
@@ -696,7 +730,7 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
       }
 
       // Load RAG tools if documents are available
-      if (hasDocuments && ragFeatureAvailable) {
+      if ((hasDocuments || this.capabilityToggles.embeddings) && ragFeatureAvailable) {
         try {
           const ragTools = await this.serviceHub.rag().getTools()
           if (Array.isArray(ragTools) && ragTools.length > 0) {
@@ -915,6 +949,7 @@ export class CustomChatTransport implements ChatTransport<UIMessage> {
         ...modelSamplingDefaults,
         ...(inferenceParams ?? {}),
         ...reasoningParams,
+        ...buildCapabilityRequestParams(effectiveProviderName, modelId, this.capabilityToggles),
       }
       if (isPredefinedRemoteProvider(effectiveProviderName)) {
         for (const key of Object.keys(paramsSettings)) delete mergedParams[key]

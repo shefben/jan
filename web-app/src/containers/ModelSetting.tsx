@@ -20,6 +20,7 @@ import { useServiceHub } from '@/hooks/useServiceHub'
 import { cn, getModelDisplayName } from '@/lib/utils'
 import { useTranslation } from '@/i18n/react-i18next-compat'
 import { useAppState } from '@/hooks/useAppState'
+import { isUtilityOnlyModel } from '@/lib/modelCapabilities'
 import { paramsSettings, samplerKeysForProvider } from '@/lib/predefinedParams'
 
 const MTP_MIN_BUILD = 9193
@@ -39,10 +40,27 @@ export function ModelSetting({
   model,
   provider,
 }: ModelSettingProps) {
-  const { updateProvider } = useModelProvider()
+  const { updateProvider, providers } = useModelProvider()
   const { t } = useTranslation()
   const serviceHub = useServiceHub()
   const setActiveModels = useAppState((state) => state.setActiveModels)
+
+  const draftModelCandidates = useMemo(
+    () =>
+      providers
+        .filter((p) => p.provider === 'llamacpp')
+        .flatMap((p) => p.models)
+        .filter((candidate) => candidate.id !== model.id && !isUtilityOnlyModel(candidate))
+        .map((candidate) => ({ value: candidate.id, name: candidate.displayName ?? candidate.id })),
+    [model.id, providers]
+  )
+
+  const getControllerProps = useCallback((config: ProviderSetting) => {
+    if (config.key === 'draft_model_id') {
+      return { ...config.controller_props, options: [...(config.controller_props?.options || []), ...draftModelCandidates], value: config.controller_props?.value }
+    }
+    return { ...config.controller_props, value: config.controller_props?.value }
+  }, [draftModelCandidates])
 
   // Debounced stopModel — memoized so the timer survives across renders.
   // Without useMemo a fresh debounce is created every keystroke and the
@@ -179,7 +197,11 @@ export function ModelSetting({
         key === 'offload_mmproj' ||
         key === 'batch_size' ||
         key === 'cpu_moe' ||
-        key === 'n_cpu_moe'
+        key === 'n_cpu_moe' ||
+        key === 'draft_min' ||
+        key === 'draft_max' ||
+        key === 'spec_type' ||
+        key === 'reasoning'
       ) {
         // Check if model is running before stopping it
         serviceHub
@@ -320,10 +342,7 @@ export function ModelSetting({
                     title={config.title}
                     description={config.description}
                     controllerType={config.controller_type}
-                    controllerProps={{
-                      ...config.controller_props,
-                      value: config.controller_props?.value,
-                    }}
+                    controllerProps={getControllerProps(config)}
                     onChange={(newValue) => handleSettingChange(key, newValue)}
                   />
                 </div>

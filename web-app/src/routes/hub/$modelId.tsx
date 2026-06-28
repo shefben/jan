@@ -27,6 +27,8 @@ import { cn } from '@/lib/utils'
 import { useGeneralSetting } from '@/hooks/useGeneralSetting'
 import { ModelInfoHoverCard } from '@/containers/ModelInfoHoverCard'
 import { DEFAULT_MODEL_QUANTIZATIONS } from '@/constants/models'
+import { ModelScoreBadge } from '@/components/ModelScoreBadge'
+import { useModelScore } from '@/hooks/useModelScores'
 import { useTranslation } from '@/i18n'
 
 type SearchParams = {
@@ -58,6 +60,11 @@ function HubModelDetailContent() {
   } = useDownloadStore()
   const serviceHub = useServiceHub()
   const [repoData, setRepoData] = useState<CatalogModel | undefined>()
+
+  const { modelScore, fetchModelScore } = useModelScore((state) => ({
+    modelScore: state.getScore(modelId),
+    fetchModelScore: state.fetchModelScore,
+  }))
 
   // State for README content
   const [readmeContent, setReadmeContent] = useState<string>('')
@@ -167,6 +174,12 @@ function HubModelDetailContent() {
     })
   }, [displayQuants])
 
+
+
+  useEffect(() => {
+    if (!modelData) return
+    void fetchModelScore(modelData)
+  }, [fetchModelScore, modelData])
   // Fetch README content when modelData.readme is available
   useEffect(() => {
     if (modelData?.readme) {
@@ -305,6 +318,35 @@ function HubModelDetailContent() {
                   ))}
                 </div>
               )}
+            </div>
+
+
+            {/* Fit Score Section */}
+            <div className="mb-8">
+              <div className="flex items-center gap-2 mb-4">
+                <h2 className="text-lg font-semibold text-foreground">
+                  {t('hub:scoreSummary.fitScore')}
+                </h2>
+                <ModelScoreBadge score={modelScore} />
+              </div>
+              {modelScore?.status === 'ready' && modelScore.breakdown ? (
+                <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
+                  <span className="rounded-md bg-secondary px-3 py-1">
+                    {t('hub:scoreSummary.token-sec')}: {modelScore.estimated_tps > 0 ? modelScore.estimated_tps.toFixed(1) : t('hub:scoreSummary.na')}
+                  </span>
+                  <span className="rounded-md bg-secondary px-3 py-1">
+                    {t('hub:scoreSummary.bestQuant')}: {modelScore.breakdown.best_quant}
+                  </span>
+                  <span className="rounded-md bg-secondary px-3 py-1">
+                    {t('hub:scoreSummary.runMode')}: {modelScore.breakdown.run_mode}
+                  </span>
+                  <span className="rounded-md bg-secondary px-3 py-1">
+                    {t('hub:scoreSummary.memRequiredGb')}: {modelScore.breakdown.memory_required_gb.toFixed(1)} GB
+                  </span>
+                </div>
+              ) : modelScore?.reason ? (
+                <p className="text-sm text-muted-foreground">{modelScore.reason}</p>
+              ) : null}
             </div>
 
             {/* Variants Section */}

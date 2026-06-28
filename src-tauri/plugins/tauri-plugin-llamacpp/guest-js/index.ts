@@ -4,6 +4,8 @@ import {
   DeviceInfo,
   UnloadResult,
   GgufMetadata,
+  HubModelScoreRequest,
+  HubModelScoreResult,
   LlamacppConfig,
   BackendVersion,
   BackendFeatures,
@@ -29,6 +31,12 @@ function asI32(v: any, defaultValue = 0): number {
   if (n > I32_MAX) return I32_MAX
   if (n < I32_MIN) return I32_MIN
   return n
+}
+
+function asU32(v: any, defaultValue = 0): number {
+  const n = Math.trunc(asNumber(v, defaultValue))
+  if (n <= 0) return 0
+  return Math.min(n, I32_MAX)
 }
 
 function asBool(v: any, defaultValue = false): boolean {
@@ -110,12 +118,17 @@ export function normalizeLlamacppConfig(config: any): LlamacppConfig {
 
     ctx_shift: asBool(config.ctx_shift),
     parallel: asI32(config.parallel, 1),
+    embedding_model_id: asString(config.embedding_model_id),
 
     reasoning: asString(config.reasoning, 'auto'),
     cache_ram: asI32(config.cache_ram, -1),
     cache_reuse: asI32(config.cache_reuse, 0),
     swa_full: asBool(config.swa_full),
     keep: asI32(config.keep, 0),
+    draft_model_path: asString(config.draft_model_path, ''),
+    spec_type: asString(config.spec_type, 'none'),
+    draft_max: asU32(config.draft_max, 0),
+    draft_min: asU32(config.draft_min, 0),
   }
 }
 
@@ -204,6 +217,13 @@ export async function isModelSupported(
     path,
     ctxSize,
   })
+}
+
+
+export async function scoreHubModel(
+  request: HubModelScoreRequest
+): Promise<HubModelScoreResult> {
+  return await invoke('plugin:llamacpp|score_hub_model', { request })
 }
 
 // Cleanup commands

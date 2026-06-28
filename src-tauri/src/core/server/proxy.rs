@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fs;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tauri_plugin_llamacpp::state::LlamacppState;
 use tokio::sync::Mutex;
@@ -22,6 +22,10 @@ use tokio::sync::Mutex;
 use crate::core::{
     mcp::models::McpSettings,
     state::{ProviderConfig, ServerHandle, SharedMcpServers},
+};
+use crate::core::server::rerank::{
+    build_rerank_status_json, is_rerank_status_path, postprocess_rerank_response,
+    prepare_rerank_request, record_rerank_observation, rerank_error_json,
 };
 
 type ResBody = BoxBody<Bytes, Infallible>;
@@ -1564,6 +1568,137 @@ async fn proxy_request(
     let mut mlx_model_id: Option<String> = None;
 
     match (method.clone(), destination_path.as_str()) {
+        (hyper::Method::GET, path) if is_rerank_status_path(path) => {
+            let status_json = build_rerank_status_json(&jan_data_folder, &llama_state, &client).await;
+            let mut response_builder = Response::builder()
+                .status(StatusCode::OK)
+                .header(hyper::header::CONTENT_TYPE, "application/json");
+            response_builder = add_cors_headers_with_host_and_origin(
+                response_builder,
+                &host_header,
+                &origin_header,
+                &config.trusted_hosts,
+            );
+            return Ok(response_builder.body(full(status_json.to_string())).unwrap());
+        }
+        (hyper::Method::POST, "/rerank") | (hyper::Method::POST, "/reranking") => {
+            let started = std::time::Instant::now();
+            let body_bytes = match body.collect().await {
+                Ok(c) => c.to_bytes(),
+                Err(_) => {
+                    let mut error_response = Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR);
+                    error_response = add_cors_headers_with_host_and_origin(
+                        error_response,
+                        &host_header,
+                        &origin_header,
+                        &config.trusted_hosts,
+                    );
+                    return Ok(error_response.body(full("Failed to read request body")).unwrap());
+                }
+            };
+            let prepared = match prepare_rerank_request(body_bytes, &jan_data_folder, &client, &llama_state).await {
+                Ok(v) => v,
+                Err(e) => {
+                    let mut error_response = Response::builder().status(e.status);
+                    error_response = add_cors_headers_with_host_and_origin(
+                        error_response,
+                        &host_header,
+                        &origin_header,
+                        &config.trusted_hosts,
+                    );
+                    return Ok(error_response
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(full(rerank_error_json(&e.kind, &e.message)))
+                        .unwrap());
+                }
+            };
+            let (upstream_url, api_key) = if let Some(ext) = prepared.external.clone() {
+                let base = ext.base_url.trim_end_matches('/').to_string();
+                (format!("{base}/rerank"), ext.api_key)
+            } else if let Some((url, key)) = router_upstream(&llama_state, destination_path.as_str()).await {
+                (url, Some(key))
+            } else {
+                let mut error_response = Response::builder().status(StatusCode::SERVICE_UNAVAILABLE);
+                error_response = add_cors_headers_with_host_and_origin(
+                    error_response,
+                    &host_header,
+                    &origin_header,
+                    &config.trusted_hosts,
+                );
+                return Ok(error_response
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(full(rerank_error_json("router_unavailable", "llama.cpp router is not running")))
+                    .unwrap());
+            };
+            let mut req_out = client
+                .post(&upstream_url)
+                .header("Content-Type", "application/json")
+                .body(prepared.body.clone());
+            if let Some(key) = api_key {
+                req_out = req_out.header("Authorization", format!("Bearer {key}"));
+            }
+            let upstream = match req_out.send().await {
+                Ok(v) => v,
+                Err(e) => {
+                    let mut error_response = Response::builder().status(StatusCode::BAD_GATEWAY);
+                    error_response = add_cors_headers_with_host_and_origin(
+                        error_response,
+                        &host_header,
+                        &origin_header,
+                        &config.trusted_hosts,
+                    );
+                    return Ok(error_response
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(full(rerank_error_json("upstream_error", &format!("Rerank upstream request failed: {e}"))))
+                        .unwrap());
+                }
+            };
+            let status = upstream.status();
+            let text = upstream.text().await.unwrap_or_default();
+            if !status.is_success() {
+                let mut error_response = Response::builder().status(status);
+                error_response = add_cors_headers_with_host_and_origin(
+                    error_response,
+                    &host_header,
+                    &origin_header,
+                    &config.trusted_hosts,
+                );
+                return Ok(error_response
+                    .header(hyper::header::CONTENT_TYPE, "application/json")
+                    .body(full(text))
+                    .unwrap());
+            }
+            let raw_json: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(e) => {
+                    let mut error_response = Response::builder().status(StatusCode::BAD_GATEWAY);
+                    error_response = add_cors_headers_with_host_and_origin(
+                        error_response,
+                        &host_header,
+                        &origin_header,
+                        &config.trusted_hosts,
+                    );
+                    return Ok(error_response
+                        .header(hyper::header::CONTENT_TYPE, "application/json")
+                        .body(full(rerank_error_json("invalid_upstream_response", &format!("Invalid rerank JSON from upstream: {e}"))))
+                        .unwrap());
+                }
+            };
+            let out = postprocess_rerank_response(raw_json, prepared.trace, started.elapsed().as_millis() as u64);
+            if let Some(meta) = out.get("meta") {
+                record_rerank_observation(meta.clone()).await;
+            }
+            let mut response_builder = Response::builder()
+                .status(StatusCode::OK)
+                .header(hyper::header::CONTENT_TYPE, "application/json");
+            response_builder = add_cors_headers_with_host_and_origin(
+                response_builder,
+                &host_header,
+                &origin_header,
+                &config.trusted_hosts,
+            );
+            return Ok(response_builder.body(full(out.to_string())).unwrap());
+        }
         // Anthropic /messages endpoint - tries /messages first, falls back to /chat/completions on error
         (hyper::Method::POST, "/messages") => {
             is_anthropic_messages = true;
@@ -2322,6 +2457,172 @@ async fn proxy_request(
                     return Ok(error_response.body(full(error_msg)).unwrap());
                 }
             }
+        }
+
+
+        (hyper::Method::GET, "/models/available") => {
+            log::debug!("Handling GET /v1/models/available request");
+            let data_folder = PathBuf::from(&jan_data_folder);
+            let router_models: std::collections::HashSet<String> = router_list_models(&llama_state, &client).await.into_iter().collect();
+            let models_root = data_folder.join("llamacpp").join("models");
+            let mut all_models: Vec<serde_json::Value> = Vec::new();
+
+            if models_root.exists() {
+                let mut stack = vec![models_root.clone()];
+                while let Some(dir) = stack.pop() {
+                    let yml_path = dir.join("model.yml");
+                    if yml_path.exists() {
+                        if let Ok(content) = fs::read_to_string(&yml_path) {
+                            if let Ok(yml) = serde_yaml::from_str::<serde_json::Value>(&content) {
+                                let model_id = dir
+                                    .strip_prefix(&models_root)
+                                    .unwrap_or(&dir)
+                                    .to_string_lossy()
+                                    .replace('\\', "/");
+                                all_models.push(serde_json::json!({
+                                    "id": model_id,
+                                    "object": "model",
+                                    "engine": "llamacpp",
+                                    "status": if router_models.contains(&model_id) { "running" } else { "available" },
+                                    "name": yml.get("name").and_then(|v| v.as_str()).unwrap_or(&model_id),
+                                    "size_bytes": yml.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0),
+                                    "embedding": yml.get("embedding").and_then(|v| v.as_bool()).unwrap_or(false),
+                                    "reranking": yml.get("reranking").and_then(|v| v.as_bool()).unwrap_or(false),
+                                    "capabilities": yml.get("capabilities").cloned().unwrap_or_else(|| serde_json::json!([])),
+                                }));
+                                continue;
+                            }
+                        }
+                    }
+                    if let Ok(entries) = fs::read_dir(&dir) {
+                        for entry in entries.flatten() {
+                            if entry.path().is_dir() {
+                                stack.push(entry.path());
+                            }
+                        }
+                    }
+                }
+            }
+
+            all_models.sort_by(|a, b| {
+                let a_id = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let b_id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                a_id.cmp(b_id)
+            });
+
+            let body_str = serde_json::json!({"object": "list", "data": all_models}).to_string();
+            let mut response_builder = Response::builder().status(StatusCode::OK).header(hyper::header::CONTENT_TYPE, "application/json");
+            response_builder = add_cors_headers_with_host_and_origin(response_builder, &host_header, &origin_header, &config.trusted_hosts);
+            return Ok(response_builder.body(full(body_str)).unwrap());
+        }
+
+        (hyper::Method::POST, "/models/load") => {
+            log::debug!("Handling POST /v1/models/load request");
+            let body_bytes = match body.collect().await {
+                Ok(c) => c.to_bytes(),
+                Err(_) => {
+                    let mut error_response = Response::builder().status(StatusCode::BAD_REQUEST);
+                    error_response = add_cors_headers_with_host_and_origin(error_response, &host_header, &origin_header, &config.trusted_hosts);
+                    return Ok(error_response.body(full("Failed to read request body")).unwrap());
+                }
+            };
+            let json_body: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+                Ok(v) => v,
+                Err(e) => {
+                    let mut error_response = Response::builder().status(StatusCode::BAD_REQUEST).header(hyper::header::CONTENT_TYPE, "application/json");
+                    error_response = add_cors_headers_with_host_and_origin(error_response, &host_header, &origin_header, &config.trusted_hosts);
+                    return Ok(error_response.body(full(serde_json::json!({"error": format!("Invalid JSON: {e}")}).to_string())).unwrap());
+                }
+            };
+            let model_id = match json_body.get("model").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()) {
+                Some(v) => v.to_string(),
+                None => {
+                    let mut error_response = Response::builder().status(StatusCode::BAD_REQUEST).header(hyper::header::CONTENT_TYPE, "application/json");
+                    error_response = add_cors_headers_with_host_and_origin(error_response, &host_header, &origin_header, &config.trusted_hosts);
+                    return Ok(error_response.body(full(serde_json::json!({"error": "Missing 'model' field in request body"}).to_string())).unwrap());
+                }
+            };
+            let model_id_lower = model_id.to_lowercase();
+            let has_pct_traversal = model_id_lower.contains("%2e%2e") || model_id_lower.contains("%2f") || model_id_lower.contains("%5c");
+            let has_path_traversal = Path::new(&model_id).components().any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_)));
+            if has_pct_traversal || has_path_traversal {
+                let mut error_response = Response::builder().status(StatusCode::BAD_REQUEST).header(hyper::header::CONTENT_TYPE, "application/json");
+                error_response = add_cors_headers_with_host_and_origin(error_response, &host_header, &origin_header, &config.trusted_hosts);
+                return Ok(error_response.body(full(serde_json::json!({"error": "Invalid model ID: path traversal not allowed"}).to_string())).unwrap());
+            }
+            let model_yml = PathBuf::from(&jan_data_folder).join("llamacpp").join("models").join(&model_id).join("model.yml");
+            if !model_yml.exists() {
+                let mut error_response = Response::builder().status(StatusCode::NOT_FOUND).header(hyper::header::CONTENT_TYPE, "application/json");
+                error_response = add_cors_headers_with_host_and_origin(error_response, &host_header, &origin_header, &config.trusted_hosts);
+                return Ok(error_response.body(full(serde_json::json!({"error": format!("Model '{model_id}' is not available locally")}).to_string())).unwrap());
+            }
+            let (router_url, router_key) = match router_upstream(&llama_state, "/chat/completions").await {
+                Some(v) => v,
+                None => {
+                    let mut error_response = Response::builder().status(StatusCode::SERVICE_UNAVAILABLE).header(hyper::header::CONTENT_TYPE, "application/json");
+                    error_response = add_cors_headers_with_host_and_origin(error_response, &host_header, &origin_header, &config.trusted_hosts);
+                    return Ok(error_response.body(full(serde_json::json!({"error": "llama.cpp router is not running"}).to_string())).unwrap());
+                }
+            };
+            let warmup_body = serde_json::json!({
+                "model": model_id,
+                "messages": [{"role": "user", "content": " "}],
+                "stream": false,
+                "n_predict": 0,
+                "max_tokens": 1
+            });
+            let resp = client.post(&router_url).header("Authorization", format!("Bearer {router_key}")).json(&warmup_body).send().await;
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    let body_str = serde_json::json!({"success": true, "model": model_id, "message": "Model load requested through llama.cpp router"}).to_string();
+                    let mut response_builder = Response::builder().status(StatusCode::OK).header(hyper::header::CONTENT_TYPE, "application/json");
+                    response_builder = add_cors_headers_with_host_and_origin(response_builder, &host_header, &origin_header, &config.trusted_hosts);
+                    return Ok(response_builder.body(full(body_str)).unwrap());
+                }
+                Ok(r) => {
+                    let status = r.status();
+                    let text = r.text().await.unwrap_or_default();
+                    let mut error_response = Response::builder().status(status).header(hyper::header::CONTENT_TYPE, "application/json");
+                    error_response = add_cors_headers_with_host_and_origin(error_response, &host_header, &origin_header, &config.trusted_hosts);
+                    return Ok(error_response.body(full(serde_json::json!({"error": text}).to_string())).unwrap());
+                }
+                Err(e) => {
+                    let mut error_response = Response::builder().status(StatusCode::BAD_GATEWAY).header(hyper::header::CONTENT_TYPE, "application/json");
+                    error_response = add_cors_headers_with_host_and_origin(error_response, &host_header, &origin_header, &config.trusted_hosts);
+                    return Ok(error_response.body(full(serde_json::json!({"error": format!("Failed to contact llama.cpp router: {e}")}).to_string())).unwrap());
+                }
+            }
+        }
+
+        (hyper::Method::POST, "/models/unload") => {
+            log::debug!("Handling POST /v1/models/unload request");
+            let body_bytes = match body.collect().await {
+                Ok(c) => c.to_bytes(),
+                Err(_) => {
+                    let mut error_response = Response::builder().status(StatusCode::BAD_REQUEST);
+                    error_response = add_cors_headers_with_host_and_origin(error_response, &host_header, &origin_header, &config.trusted_hosts);
+                    return Ok(error_response.body(full("Failed to read request body")).unwrap());
+                }
+            };
+            let json_body: serde_json::Value = match serde_json::from_slice(&body_bytes) { Ok(v) => v, Err(_) => serde_json::json!({}) };
+            let model_id = json_body.get("model").and_then(|v| v.as_str()).unwrap_or("*").to_string();
+            if let Some((router_url, router_key)) = router_upstream(&llama_state, "/models/unload").await {
+                if let Ok(resp) = client.post(&router_url).header("Authorization", format!("Bearer {router_key}")).body(body_bytes.clone()).send().await {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_else(|_| "{}".to_string());
+                    let mut response_builder = Response::builder().status(status).header(hyper::header::CONTENT_TYPE, "application/json");
+                    response_builder = add_cors_headers_with_host_and_origin(response_builder, &host_header, &origin_header, &config.trusted_hosts);
+                    return Ok(response_builder.body(full(text)).unwrap());
+                }
+            }
+            let body_str = serde_json::json!({
+                "success": true,
+                "model": model_id,
+                "message": "Unload request accepted. Current llama.cpp router builds may evict models lazily according to models_max."
+            }).to_string();
+            let mut response_builder = Response::builder().status(StatusCode::ACCEPTED).header(hyper::header::CONTENT_TYPE, "application/json");
+            response_builder = add_cors_headers_with_host_and_origin(response_builder, &host_header, &origin_header, &config.trusted_hosts);
+            return Ok(response_builder.body(full(body_str)).unwrap());
         }
         (hyper::Method::GET, "/models") => {
             log::debug!("Handling GET /v1/models request");

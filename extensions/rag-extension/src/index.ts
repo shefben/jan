@@ -24,6 +24,13 @@ export default class RagExtension extends RAGExtension {
     maxFileSizeMB: 100,
     parseMode: 'auto' as 'auto' | 'inline' | 'embeddings' | 'prompt',
     autoInlineContextRatio: 0.75,
+    rerankingMode: 'auto' as 'auto' | 'off' | 'model',
+    rerankingModel: 'auto',
+    rerankTopKBefore: 60,
+    rerankTopNAfter: 8,
+    rerankMinRelevanceScore: 0,
+    rerankMaxTokensPerDoc: 4096,
+    rerankEvidenceMode: 'off' as 'off' | 'top_n' | 'all',
   }
 
   async onLoad(): Promise<void> {
@@ -73,6 +80,13 @@ export default class RagExtension extends RAGExtension {
       'auto_inline_context_ratio',
       this.config.autoInlineContextRatio
     )
+    this.config.rerankingMode = await this.getSetting('reranking_mode', this.config.rerankingMode)
+    this.config.rerankingModel = await this.getSetting('reranking_model', this.config.rerankingModel)
+    this.config.rerankTopKBefore = await this.getSetting('rerank_top_k_before', this.config.rerankTopKBefore)
+    this.config.rerankTopNAfter = await this.getSetting('rerank_top_n_after', this.config.rerankTopNAfter)
+    this.config.rerankMinRelevanceScore = await this.getSetting('rerank_min_relevance_score', this.config.rerankMinRelevanceScore)
+    this.config.rerankMaxTokensPerDoc = await this.getSetting('rerank_max_tokens_per_doc', this.config.rerankMaxTokensPerDoc)
+    this.config.rerankEvidenceMode = await this.getSetting('rerank_evidence_mode', this.config.rerankEvidenceMode)
   }
 
   async checkANNAvailability() {
@@ -195,8 +209,10 @@ export default class RagExtension extends RAGExtension {
     const effectiveThreadId = scope === 'project' ? projectId || threadId : threadId
 
     const s = this.config
-    const topK = (args['top_k'] as number) || s.retrievalLimit || 3
-    const threshold = s.retrievalThreshold ?? 0.3
+    const requestedTopK = (args['top_k'] as number) || s.retrievalLimit || 3
+    const shouldRerank = s.rerankingMode !== 'off'
+    const topK = shouldRerank ? Math.max(requestedTopK, s.rerankTopKBefore || 60) : requestedTopK
+    const threshold = shouldRerank ? Math.min(s.retrievalThreshold ?? 0.3, 0.05) : (s.retrievalThreshold ?? 0.3)
     const mode: 'auto' | 'ann' | 'linear' = s.searchMode || 'auto'
 
     if (s.enabled === false) {
@@ -260,20 +276,30 @@ export default class RagExtension extends RAGExtension {
         )
       }
 
+      let citations =
+        results?.map((r: any) => ({
+          id: r.id,
+          text: r.text,
+          score: r.score,
+          file_id: r.file_id,
+          chunk_file_order: r.chunk_file_order,
+        })) ?? []
+      let reranking: Record<string, unknown> = { enabled: false }
+      if (shouldRerank && citations.length > 1) {
+        const reranked = await this.rerankCitations(query, citations, requestedTopK)
+        citations = reranked.citations
+        reranking = reranked.meta
+      } else {
+        citations = citations.slice(0, requestedTopK)
+      }
       const payload = {
         thread_id: threadId,
         project_id: projectId,
         scope,
         query,
-        citations:
-          results?.map((r: any) => ({
-            id: r.id,
-            text: r.text,
-            score: r.score,
-            file_id: r.file_id,
-            chunk_file_order: r.chunk_file_order,
-          })) ?? [],
+        citations,
         mode,
+        reranking,
       }
       return {
         error: '',
@@ -482,6 +508,60 @@ export default class RagExtension extends RAGExtension {
     }
   }
 
+  private async rerankCitations(
+    query: string,
+    citations: Array<Record<string, unknown>>,
+    requestedTopK: number
+  ): Promise<{ citations: Array<Record<string, unknown>>; meta: Record<string, unknown> }> {
+    const llm = window.core?.extensionManager.getByName(
+      '@janhq/llamacpp-extension'
+    ) as AIEngine & {
+      rerank?: (req: any) => Promise<{ results: Array<{ index: number; relevance_score: number; evidence?: string; contribution?: string }>; meta?: Record<string, unknown> }>
+    }
+    if (!llm?.rerank) return { citations: citations.slice(0, requestedTopK), meta: { enabled: false, reason: 'llamacpp extension has no rerank method' } }
+    try {
+      const topN = Math.max(1, Math.min(citations.length, this.config.rerankTopNAfter || requestedTopK))
+      const response = await llm.rerank({
+        model: this.config.rerankingMode === 'model' ? this.config.rerankingModel : 'auto',
+        query,
+        documents: citations.map((c, index) => ({
+          text: String(c.text ?? ''),
+          metadata: {
+            index,
+            id: c.id,
+            file_id: c.file_id,
+            chunk_file_order: c.chunk_file_order,
+            vector_score: c.score,
+          },
+        })),
+        top_n: topN,
+        return_documents: true,
+        min_relevance_score: this.config.rerankMinRelevanceScore || undefined,
+        max_tokens_per_doc: this.config.rerankMaxTokensPerDoc || 4096,
+        evidence_mode: this.config.rerankEvidenceMode,
+      })
+      const reranked = response.results
+        .map((r) => ({
+          ...citations[r.index],
+          rerank_score: r.relevance_score,
+          evidence: r.evidence,
+          contribution: r.contribution,
+        }))
+        .filter((c) => c.text)
+      return { citations: reranked, meta: { enabled: true, ...(response.meta ?? {}) } }
+    } catch (e) {
+      console.warn('[RAG] Reranking failed, falling back to vector order:', e)
+      return {
+        citations: citations.slice(0, requestedTopK),
+        meta: {
+          enabled: false,
+          fallback_used: true,
+          error: e instanceof Error ? e.message : String(e),
+        },
+      }
+    }
+  }
+
   onSettingUpdate<T>(key: string, value: T): void {
     switch (key) {
       case 'enabled':
@@ -514,6 +594,27 @@ export default class RagExtension extends RAGExtension {
           | 'inline'
           | 'embeddings'
           | 'prompt'
+        break
+      case 'reranking_mode':
+        this.config.rerankingMode = String(value) as 'auto' | 'off' | 'model'
+        break
+      case 'reranking_model':
+        this.config.rerankingModel = String(value)
+        break
+      case 'rerank_top_k_before':
+        this.config.rerankTopKBefore = Number(value)
+        break
+      case 'rerank_top_n_after':
+        this.config.rerankTopNAfter = Number(value)
+        break
+      case 'rerank_min_relevance_score':
+        this.config.rerankMinRelevanceScore = Number(value)
+        break
+      case 'rerank_max_tokens_per_doc':
+        this.config.rerankMaxTokensPerDoc = Number(value)
+        break
+      case 'rerank_evidence_mode':
+        this.config.rerankEvidenceMode = String(value) as 'off' | 'top_n' | 'all'
         break
     }
   }

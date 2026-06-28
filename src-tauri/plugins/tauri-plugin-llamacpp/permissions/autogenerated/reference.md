@@ -27,6 +27,7 @@ Default permissions for the llamacpp plugin
 - `allow-estimate-kv-cache-size`
 - `allow-get-model-size`
 - `allow-is-model-supported`
+- `allow-score-hub-model`
 - `allow-map-old-backend-to-new`
 - `allow-get-local-installed-backends`
 - `allow-list-supported-backends`
@@ -989,6 +990,32 @@ Enables the router_slots_idle command without any pre-configured scope.
 <td>
 
 Denies the router_slots_idle command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`llamacpp:allow-score-hub-model`
+
+</td>
+<td>
+
+Enables the score_hub_model command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`llamacpp:deny-score-hub-model`
+
+</td>
+<td>
+
+Denies the score_hub_model command without any pre-configured scope.
 
 </td>
 </tr>

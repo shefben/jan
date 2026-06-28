@@ -5,6 +5,7 @@ export const localStorageKey = {
   theme: 'theme',
   modelProvider: 'model-provider',
   modelSources: 'model-sources',
+  modelScores: 'model-scores',
   settingInterface: 'setting-appearance',
   settingGeneral: 'setting-general',
   settingCodeBlock: 'setting-code-block',
@@ -28,6 +29,7 @@ export const localStorageKey = {
   janModelPromptDismissed: 'jan-model-prompt-dismissed',
   agentMode: 'agent-mode',
   latestJanModel: 'latest-jan-model',
+  capabilityToggles: 'capability-toggles',
   defaultEmbeddingModel: 'default-embedding-model',
   pausedDownloads: 'paused-downloads',
 }

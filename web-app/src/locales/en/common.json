@@ -523,5 +523,7 @@
     "forceQuit": "Force quit",
     "forcing": "Force quitting…",
     "shuttingDown": "Shutting down…"
-  }
+  },
+  "searchIndexing": "Still indexing…",
+  "searchIndexingDesc": "We're loading your message history. Matches will appear as soon as indexing finishes."
 }

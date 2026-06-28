@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { ThreadMessage } from '@janhq/core'
 import { getServiceHub } from '@/hooks/useServiceHub'
+import { getThreadSearchIndex } from '@/lib/search-index'
 
 type MessageState = {
   messages: Record<string, ThreadMessage[]>
@@ -24,6 +25,8 @@ export const useMessages = create<MessageState>()((set, get) => ({
         [threadId]: messages,
       },
     }))
+
+    getThreadSearchIndex().invalidateThread(threadId)
   },
   addMessage: (message) => {
     const newMessage = {
@@ -41,6 +44,8 @@ export const useMessages = create<MessageState>()((set, get) => ({
         ],
       },
     }))
+
+    getThreadSearchIndex().invalidateThread(message.thread_id)
 
     // Persist to storage asynchronously
     getServiceHub().messages().createMessage(newMessage).then((createdMessage) => {
@@ -72,6 +77,8 @@ export const useMessages = create<MessageState>()((set, get) => ({
       },
     }))
 
+    getThreadSearchIndex().invalidateThread(message.thread_id)
+
     // Persist to storage asynchronously using modifyMessage instead of createMessage
     // to prevent duplicates when updating existing messages
     getServiceHub().messages().modifyMessage(updatedMessage).catch((error) => {
@@ -92,5 +99,6 @@ export const useMessages = create<MessageState>()((set, get) => ({
   },
   clearAllMessages: () => {
     set({ messages: {} })
+    getThreadSearchIndex().invalidate()
   },
 }))

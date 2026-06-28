@@ -14,5 +14,27 @@
   "useModel": "Use this model",
   "downloadModel": "Download model",
   "tools": "Tools",
-  "searchPlaceholder": "Search for models on Hugging Face..."
+  "searchPlaceholder": "Search for models on Hugging Face...",
+  "scoreSummary": {
+    "fitScore": "Fit Score",
+    "token-sec": "tok/sec",
+    "na": "N/A",
+    "bestQuant": "Best Quant",
+    "runMode": "Run Mode",
+    "memRequiredGb": "Memory Required",
+    "pendingDescription": "Scoring this model for your hardware…",
+    "fitLevels": {
+      "perfect": "Perfect",
+      "good": "Good",
+      "marginal": "Marginal",
+      "tooTight": "Too Tight"
+    },
+    "runModes": {
+      "gpu": "GPU",
+      "cpuOffload": "CPU Offload",
+      "cpuOnly": "CPU Only",
+      "moeOffload": "MoE Offload",
+      "tensorParallel": "Tensor Parallel"
+    }
+  }
 }

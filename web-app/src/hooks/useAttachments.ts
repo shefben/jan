@@ -31,6 +31,7 @@ type AttachmentsStore = AttachmentsSettings & {
   setSearchMode: (v: 'auto' | 'ann' | 'linear') => void
   setParseMode: (v: 'auto' | 'inline' | 'embeddings' | 'prompt') => void
   setAutoInlineContextRatio: (v: number) => void
+  setSetting: (key: string, value: unknown) => void
 }
 
 const getRagExtension = (): RAGExtension | undefined => {
@@ -54,6 +55,27 @@ export const useAttachments = create<AttachmentsStore>()((set) => ({
   parseMode: 'auto',
   autoInlineContextRatio: 0.75,
   settingsDefs: [],
+  setSetting: async (key, value) => {
+    const ext = getRagExtension()
+    if (ext?.updateSettings) {
+      await ext.updateSettings([
+        {
+          key,
+          controllerProps: { value },
+        } as Partial<SettingComponentProps>,
+      ])
+    }
+    set((s) => ({
+      settingsDefs: s.settingsDefs.map((d) =>
+        d.key === key
+          ? ({
+              ...d,
+              controllerProps: { ...d.controllerProps, value },
+            } as SettingComponentProps)
+          : d
+      ),
+    }))
+  },
   loadSettingsDefs: async () => {
     const ext = getRagExtension()
     if (!ext?.getSettings) return false

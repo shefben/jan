@@ -4,6 +4,7 @@ export interface SessionInfo {
   port: number
   model_id: string
   is_embedding: boolean
+  is_reranking?: boolean
   api_key: string
 }
 
@@ -29,6 +30,47 @@ export interface GgufMetadata {
   version: number
   tensor_count: number
   metadata: Record<string, string>
+}
+
+
+export type ModelScoreStatus = 'ready' | 'unavailable' | 'error'
+
+export interface ModelScoreBreakdown {
+  quality: number
+  speed: number
+  fit: number
+  context: number
+  best_quant: string
+  fit_level: string
+  run_mode: string
+  memory_required_gb: number
+  utilization_pct: number
+  use_case: string
+}
+
+export interface HubModelScoreRequest {
+  model_name: string
+  developer?: string
+  model_path: string
+  runtime?: 'llamacpp' | 'mlx'
+  quantization?: string
+  total_size_bytes?: number
+  ctx_size?: number
+  use_case?: string
+  capabilities?: string[]
+  release_date?: string
+  tools?: boolean
+  num_mmproj?: number
+  pinned?: boolean
+}
+
+export interface HubModelScoreResult {
+  status: ModelScoreStatus
+  overall?: number
+  estimated_tps: number | null
+  breakdown?: ModelScoreBreakdown
+  used_builtin_fallback: boolean
+  reason?: string
 }
 
 // llama.cpp settings
@@ -75,11 +117,17 @@ export type LlamacppConfig = {
   rope_freq_scale: number
   ctx_shift: boolean
   parallel: number
+  embedding_model_id: string
   reasoning: string
   cache_ram: number
   cache_reuse: number
   swa_full: boolean
   keep: number
+  draft_model_id?: string
+  draft_model_path: string
+  spec_type: string
+  draft_max: number
+  draft_min: number
 }
 
 export type ModelPlan = {
@@ -110,6 +158,69 @@ export interface ModelConfig {
   mmproj_sha256?: string
   mmproj_size_bytes?: number
   embedding?: boolean
+  reranking?: boolean
+  reranking_check_v?: number
+  capabilities?: {
+    chat?: boolean
+    embedding?: boolean
+    rerank?: boolean
+    [key: string]: boolean | undefined
+  }
+  preferred_for?: string[]
+  score_normalization?: 'none' | 'sigmoid' | 'auto'
+  max_tokens_per_doc?: number
+  pooling?: 'none' | 'mean' | 'cls' | 'last' | 'rank'
+  ubatch_size?: number
+  batch_size?: number
+}
+
+export type RerankDocument =
+  | string
+  | {
+      text?: string
+      content?: string
+      page_content?: string
+      body?: string
+      id?: string
+      metadata?: Record<string, unknown>
+      [key: string]: unknown
+    }
+
+export interface RerankRequest {
+  model?: string
+  query: string
+  documents?: RerankDocument[]
+  texts?: RerankDocument[]
+  top_n?: number
+  top_k?: number
+  return_documents?: boolean
+  normalize?: boolean
+  normalize_scores?: boolean
+  raw_scores?: boolean
+  max_tokens_per_doc?: number
+  min_relevance_score?: number
+  evidence_mode?: 'off' | 'top_n' | 'all'
+  profile?: 'default' | 'code' | 'multilingual' | 'long'
+  [key: string]: unknown
+}
+
+export interface RerankResult {
+  index: number
+  relevance_score: number
+  raw_relevance_score?: number
+  document?: RerankDocument
+  evidence?: string
+  contribution?: string
+  [key: string]: unknown
+}
+
+export interface RerankResponse {
+  object?: string
+  model: string
+  results: RerankResult[]
+  usage?: Record<string, number>
+  meta?: Record<string, unknown>
+  [key: string]: unknown
 }
 
 export interface EmbeddingResponse {

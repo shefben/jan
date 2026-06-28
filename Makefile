@@ -231,7 +231,7 @@ build-cli-dev:
 	$(call MKDIR,'src-tauri/resources/bin')	
 	cd src-tauri && cargo build --features cli --bin jan-cli
 ifeq ($(DETECTED_OS),Windows)
-	copy src-tauri\target\debug\jan-cli.exe src-tauri\resources\bin\jan-cli.exe
+	powershell -NoLogo -NoProfile -NonInteractive -Command "Copy-Item -Force -ErrorAction Stop -LiteralPath 'src-tauri/target/debug/jan-cli.exe' -Destination 'src-tauri/resources/bin/jan-cli.exe'"
 else
 	install -m755 src-tauri/target/debug/jan-cli src-tauri/resources/bin/jan-cli
 endif

@@ -1,6 +1,7 @@
 
 import { Components, ExtraProps } from 'react-markdown'
-import { memo, useDeferredValue, useMemo } from 'react'
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   cn,
   disableIndentedCodeBlockPlugin,
@@ -34,6 +35,7 @@ interface MarkdownProps {
   isStreaming?: boolean
   messageId?: string
   isAnimating?: boolean
+  copyableInlineCode?: boolean
 }
 
 // Hoisted so their identity is stable across renders — Streamdown is memoized
@@ -45,6 +47,8 @@ const STREAMDOWN_PLUGINS = { code, mermaid, cjk }
 const STREAMDOWN_CONTROLS = { mermaid: { fullscreen: false } }
 const LINK_SAFETY = { enabled: false }
 const EMPTY_MERMAID = {}
+const INLINE_CODE_SELECTOR = '[data-streamdown="inline-code"]'
+const COPY_FEEDBACK_MS = 1200
 
 // While streaming, the active (unclosed) code block would be re-highlighted by
 // Shiki over its whole contents on every commit — O(n) per render, and the
@@ -189,6 +193,7 @@ function RenderMarkdownComponent({
   messageId,
   isAnimating,
   isStreaming,
+  copyableInlineCode,
 }: MarkdownProps) {
   const renderHtmlArtifacts = useInterfaceSettings(
     (s) => s.renderHtmlArtifacts
@@ -237,14 +242,40 @@ function RenderMarkdownComponent({
       : null
   }, [normalizedContent, isStreaming, renderHtmlArtifacts])
 
+
+  const [copyBadge, setCopyBadge] = useState<{ x: number; y: number } | null>(null)
+  const copyBadgeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => () => clearTimeout(copyBadgeTimer.current), [])
+
+  const handleMarkdownClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!copyableInlineCode) return
+    const el = (event.target as HTMLElement).closest<HTMLElement>(INLINE_CODE_SELECTOR)
+    if (!el) return
+    const selection = window.getSelection()
+    if (selection && !selection.isCollapsed && selection.toString().length > 0) return
+    const text = el.textContent ?? ''
+    if (!text || !navigator.clipboard?.writeText) return
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopyBadge({ x: event.clientX, y: event.clientY })
+        clearTimeout(copyBadgeTimer.current)
+        copyBadgeTimer.current = setTimeout(() => setCopyBadge(null), COPY_FEEDBACK_MS)
+      })
+      .catch(() => {})
+  }, [copyableInlineCode])
+
   return (
     <div
       dir="auto"
       className={cn(
         'markdown wrap-break-word select-text',
         isUser && 'is-user',
+        copyableInlineCode && 'copyable-inline-code',
         className
       )}
+      onClick={copyableInlineCode ? handleMarkdownClick : undefined}
     >
       {segments
         ? segments.map((seg, i) =>
@@ -278,6 +309,16 @@ function RenderMarkdownComponent({
             className={className}
             components={mergedComponents}
           />
+        )}
+      {copyBadge &&
+        createPortal(
+          <div
+            className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-full rounded-md bg-foreground px-2 py-1 text-xs font-medium text-background shadow-md animate-in fade-in-0 zoom-in-95"
+            style={{ left: copyBadge.x, top: copyBadge.y - 8 }}
+          >
+            Copied!
+          </div>,
+          document.body
         )}
     </div>
   )
@@ -350,5 +391,6 @@ export const RenderMarkdown = memo(
   RenderMarkdownComponent,
   (prevProps, nextProps) =>
     prevProps.content === nextProps.content &&
-    prevProps.isStreaming === nextProps.isStreaming
+    prevProps.isStreaming === nextProps.isStreaming &&
+    prevProps.copyableInlineCode === nextProps.copyableInlineCode
 )

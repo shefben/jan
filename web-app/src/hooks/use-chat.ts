@@ -14,6 +14,8 @@ import {
 import { useEffect, useMemo, useRef, useCallback } from 'react'
 import { useChatSessions } from '@/stores/chat-session-store'
 import { useAppState } from '@/hooks/useAppState'
+import { useCapabilityToggles } from '@/stores/capability-toggles-store'
+import { TEMPORARY_CHAT_ID } from '@/constants/chat'
 
 type CustomChatOptions = Omit<ChatInit<UIMessage>, 'transport'> &
   Pick<UseChatOptions<UIMessage>, 'experimental_throttle' | 'resume'> & {
@@ -44,6 +46,8 @@ export function useChat(
   // Get serviceHub and model metadata from app state
   const mcpToolNames = useAppState((state) => state.mcpToolNames)
   const ragToolNames = useAppState((state) => state.ragToolNames)
+  const capabilityKey = sessionId ?? TEMPORARY_CHAT_ID
+  const capabilityToggles = useCapabilityToggles((state) => state.getToggles(capabilityKey))
 
   const existingSessionTransport = sessionId
     ? useChatSessions.getState().sessions[sessionId]?.transport
@@ -72,6 +76,10 @@ export function useChat(
       transportRef.current.setOnTokenUsage(onTokenUsage)
     }
   }, [onTokenUsage])
+
+  useEffect(() => {
+    transportRef.current?.setCapabilityToggles(capabilityToggles)
+  }, [capabilityToggles])
 
   // Memoize to prevent calling ensureSession (which has side effects) on every render
   const chat = useMemo(() => {

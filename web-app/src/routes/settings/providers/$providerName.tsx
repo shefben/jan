@@ -52,6 +52,7 @@ import {
   supportsRemoteCatalog,
   fetchTopRemoteModels,
 } from '@/lib/remoteModelCatalog'
+import { mergeDetectedCapabilities } from '@/lib/model-capabilities-detector'
 
 // as route.threadsDetail
 export const Route = createFileRoute('/settings/providers/$providerName')({
@@ -1339,7 +1340,7 @@ function ProviderDetail() {
                     </div>
                   )}
                   {(isLlamacpp ? chatModels : allModels).map((model, modelIndex) => {
-                    const capabilities = model.capabilities || []
+                    const capabilities = mergeDetectedCapabilities(model)
                     return (
                       <CardItem
                         key={modelIndex}
@@ -1530,7 +1531,7 @@ function ProviderDetail() {
                                 {getModelDisplayName(model)}
                               </h1>
                               <Capabilities
-                                capabilities={model.capabilities || []}
+                                capabilities={mergeDetectedCapabilities(model)}
                               />
                               {isDefault && (
                                 <span className="shrink-0 rounded-sm bg-main-view-fg/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">

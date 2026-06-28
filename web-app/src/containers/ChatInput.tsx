@@ -88,6 +88,8 @@ import {
 import JanBrowserExtensionDialog from '@/containers/dialogs/JanBrowserExtensionDialog'
 import { useJanBrowserExtension } from '@/hooks/useJanBrowserExtension'
 import { useAgentMode } from '@/hooks/useAgentMode'
+import { useCapabilityToggles } from '@/stores/capability-toggles-store'
+import { mergeDetectedCapabilities } from '@/lib/model-capabilities-detector'
 
 type ChatInputProps = {
   className?: string
@@ -175,6 +177,13 @@ const ChatInput = memo(function ChatInput({
     toggleAgentMode(agentModeKey)
   }, [agentModeKey, toggleAgentMode])
 
+  const capabilityKey = currentThreadId ?? TEMPORARY_CHAT_ID
+  const capabilityToggles = useCapabilityToggles((state) => state.getToggles(capabilityKey))
+  const setCapabilityToggle = useCapabilityToggles((state) => state.setToggle)
+
+
+
+
   // Get current thread messages for token counting
   const threadMessages = useMessages(
     useShallow((state) =>
@@ -187,6 +196,22 @@ const ChatInput = memo(function ChatInput({
 
   const selectedModel = useModelProvider((state) => state.selectedModel)
   const selectedProvider = useModelProvider((state) => state.selectedProvider)
+  const effectiveCapabilities = useMemo(
+    () => (selectedModel ? mergeDetectedCapabilities(selectedModel) : []),
+    [selectedModel]
+  )
+
+  useEffect(() => {
+    if (capabilityToggles.webSearch && !effectiveCapabilities.includes('web_search')) {
+      setCapabilityToggle(capabilityKey, 'webSearch', false)
+    }
+    if (capabilityToggles.reasoning && !effectiveCapabilities.includes('reasoning')) {
+      setCapabilityToggle(capabilityKey, 'reasoning', false)
+    }
+    if (capabilityToggles.embeddings && !effectiveCapabilities.includes('embeddings')) {
+      setCapabilityToggle(capabilityKey, 'embeddings', false)
+    }
+  }, [capabilityKey, capabilityToggles, effectiveCapabilities, setCapabilityToggle])
   const selectModelProvider = useModelProvider(
     (state) => state.selectModelProvider
   )
@@ -228,9 +253,8 @@ const ChatInput = memo(function ChatInput({
 
   // Check if model supports browser feature (requires both vision and tools)
   const modelSupportsBrowser = useMemo(() => {
-    const capabilities = selectedModel?.capabilities || []
-    return capabilities.includes('vision') && capabilities.includes('tools')
-  }, [selectedModel?.capabilities])
+    return effectiveCapabilities.includes('vision') && effectiveCapabilities.includes('tools')
+  }, [effectiveCapabilities])
 
   // Auto-disable browser feature when model doesn't support it
   useEffect(() => {
@@ -1999,7 +2023,7 @@ const ChatInput = memo(function ChatInput({
                     {/* RAG document attachments - desktop-only via dialog; shown when feature enabled */}
                     <DropdownMenuItem
                       onClick={handleAttachDocsIngest}
-                      disabled={!selectedModel?.capabilities?.includes('tools')}
+                      disabled={!effectiveCapabilities.includes('tools')}
                     >
                       {ingestingDocs ? (
                         <IconLoader2
@@ -2089,7 +2113,7 @@ const ChatInput = memo(function ChatInput({
                   </Tooltip>
                 )}
 
-                {!effectiveAgentMode && selectedModel?.capabilities?.includes('embeddings') && (
+                {!effectiveAgentMode && effectiveCapabilities.includes('embeddings') && (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
@@ -2103,12 +2127,12 @@ const ChatInput = memo(function ChatInput({
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
-                      <p>{t('embeddings')}</p>
+                      <p>{capabilityToggles.embeddings ? `${t('embeddings')} (${t('active')})` : t('embeddings')}</p>
                     </TooltipContent>
                   </Tooltip>
                 )}
 
-                {!effectiveAgentMode && selectedModel?.capabilities?.includes('tools') &&
+                {!effectiveAgentMode && effectiveCapabilities.includes('tools') &&
                   hasActiveMCPServers &&
                   (MCPToolComponent ? (
                     // Use custom MCP component

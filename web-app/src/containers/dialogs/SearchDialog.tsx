@@ -12,12 +12,17 @@ import {
   IconHistory,
   IconCirclePlus,
   IconFolder,
+  IconLoader,
 } from '@tabler/icons-react'
 import { useThreads } from '@/hooks/useThreads'
 import { localStorageKey } from '@/constants/localStorage'
 import { useTranslation } from '@/i18n/react-i18next-compat'
 import { cn } from '@/lib/utils'
 import { VisuallyHidden } from '@radix-ui/react-visually-hidden'
+import {
+  getThreadSearchIndex,
+  type ThreadSearchResult,
+} from '@/lib/search-index'
 
 const MAX_RECENT_SEARCHES = 5
 
@@ -32,24 +37,60 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [recentVersion, setRecentVersion] = useState(0)
+  const [fullTextResults, setFullTextResults] = useState<ThreadSearchResult[]>([])
+  const [indexReady, setIndexReady] = useState(false)
+  const [indexBuilding, setIndexBuilding] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const threads = useThreads((state) => state.threads)
   const getFilteredThreads = useThreads((state) => state.getFilteredThreads)
 
-  // Focus input when dialog opens
+  useEffect(() => {
+    if (!open) return
+
+    const index = getThreadSearchIndex()
+    if (!index.hasPendingWork(threads)) {
+      setIndexReady(true)
+      setIndexBuilding(false)
+      return
+    }
+
+    setIndexReady(index.isReady)
+    setIndexBuilding(true)
+    index.build(threads).then(() => {
+      setIndexReady(true)
+      setIndexBuilding(false)
+    })
+  }, [open, threads])
+
   useEffect(() => {
     if (open) {
       setSearchQuery('')
       setSelectedIndex(0)
+      setFullTextResults([])
       setTimeout(() => {
         inputRef.current?.focus()
       }, 0)
     }
   }, [open])
 
-  // Load recent searches from localStorage
+  useEffect(() => {
+    if (!searchQuery || !indexReady) {
+      setFullTextResults([])
+      return
+    }
+
+    clearTimeout(searchTimerRef.current)
+    searchTimerRef.current = setTimeout(() => {
+      const index = getThreadSearchIndex()
+      setFullTextResults(index.search(searchQuery))
+    }, 100)
+
+    return () => clearTimeout(searchTimerRef.current)
+  }, [searchQuery, indexReady, indexBuilding])
+
   const recentSearches = useMemo(() => {
     if (!open) return []
 
@@ -77,11 +118,11 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
 
   const handleClose = () => {
     setSearchQuery('')
+    setFullTextResults([])
     onOpenChange(false)
   }
 
   const handleSelectThread = (threadId: string) => {
-    // Save to recent searches
     const stored = localStorage.getItem(localStorageKey.recentSearches)
     let threadIds: string[] = []
 
@@ -93,11 +134,8 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
       }
     }
 
-    // Remove if already exists and add to front
     threadIds = threadIds.filter((id) => id !== threadId)
     threadIds.unshift(threadId)
-
-    // Keep only MAX_RECENT_SEARCHES
     threadIds = threadIds.slice(0, MAX_RECENT_SEARCHES)
 
     localStorage.setItem(
@@ -109,47 +147,53 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
     navigate({ to: route.threadsDetail, params: { threadId } })
   }
 
-  // Filter and group threads based on search query
   const searchResults = useMemo(() => {
     if (!searchQuery) return { withProject: [], withoutProject: [] }
 
-    const filteredThreads = getFilteredThreads(searchQuery)
+    const filteredThreads: Thread[] = indexReady
+      ? fullTextResults.map((result) => result.thread)
+      : getFilteredThreads(searchQuery)
+
     const withProject: Array<{
       thread: Thread
       projectName: string
+      snippet?: string
     }> = []
-    const withoutProject: Thread[] = []
+    const withoutProject: Array<{
+      thread: Thread
+      snippet?: string
+    }> = []
 
     filteredThreads.forEach((thread) => {
+      const fullTextResult = fullTextResults.find(
+        (result) => result.thread.id === thread.id
+      )
+      const snippet = fullTextResult?.snippet
       const projectName = thread.metadata?.project?.name
+
       if (projectName) {
-        withProject.push({ thread, projectName })
+        withProject.push({ thread, projectName, snippet })
       } else {
-        withoutProject.push(thread)
+        withoutProject.push({ thread, snippet })
       }
     })
 
     return { withProject, withoutProject }
-  }, [searchQuery, getFilteredThreads])
+  }, [searchQuery, fullTextResults, getFilteredThreads, indexReady])
 
-  // Calculate all selectable items for keyboard navigation
   const allItems = useMemo(() => {
     const items: Array<{ type: 'new' | 'recent' | 'result'; id: string }> = []
 
     if (!searchQuery) {
-      // Start new chat option
       items.push({ type: 'new', id: 'new-chat' })
-      // Recent searches
       recentSearches.forEach((thread) => {
         items.push({ type: 'recent', id: thread.id })
       })
     } else {
-      // Search results with project
       searchResults.withProject.forEach(({ thread }) => {
         items.push({ type: 'result', id: thread.id })
       })
-      // Search results without project
-      searchResults.withoutProject.forEach((thread) => {
+      searchResults.withoutProject.forEach(({ thread }) => {
         items.push({ type: 'result', id: thread.id })
       })
     }
@@ -157,12 +201,10 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
     return items
   }, [searchQuery, recentSearches, searchResults])
 
-  // Reset selected index when items change
   useEffect(() => {
     setSelectedIndex(0)
   }, [allItems.length])
 
-  // Scroll selected item into view
   useEffect(() => {
     if (listRef.current) {
       const selectedElement = listRef.current.querySelector(
@@ -213,8 +255,7 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
           <DialogTitle>{t('common:search')}</DialogTitle>
         </VisuallyHidden>
 
-        {/* Search Input */}
-        <div className="flex items-center border-b  px-3">
+        <div className="flex items-center border-b px-3">
           <IconSearch className="size-4 text-muted-foreground shrink-0" />
           <input
             ref={inputRef}
@@ -225,12 +266,31 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={handleKeyDown}
           />
+          {indexBuilding && (
+            <span
+              className="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0"
+              title="Indexing message content for full-text search"
+            >
+              <IconLoader className="size-3.5 animate-spin" />
+              <span className="hidden sm:inline">Indexing...</span>
+            </span>
+          )}
         </div>
 
-        {/* Results */}
         <div ref={listRef} className="max-h-80 overflow-y-auto px-1 py-2">
-          {/* Empty state when searching */}
-          {searchQuery && !hasResults && (
+          {searchQuery && !hasResults && indexBuilding && (
+            <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+              <IconLoader className="size-6 text-muted-foreground mb-2 animate-spin" />
+              <h3 className="text-base font-medium mb-1">
+                {t('common:searchIndexing')}
+              </h3>
+              <p className="text-xs leading-relaxed text-muted-foreground w-1/2 mx-auto">
+                {t('common:searchIndexingDesc')}
+              </p>
+            </div>
+          )}
+
+          {searchQuery && !hasResults && !indexBuilding && (
             <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
               <IconSearch className="size-6 text-muted-foreground mb-2" />
               <h3 className="text-base font-medium mb-1">
@@ -242,7 +302,6 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
             </div>
           )}
 
-          {/* Start new chat - shown when no search query */}
           {showStartNewChat && (
             <div className="p-1">
               <button
@@ -259,7 +318,6 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
             </div>
           )}
 
-          {/* Recent searches - shown when search is empty */}
           {!searchQuery && recentSearches.length > 0 && (
             <div className="p-1">
               <div className="px-3 pt-1.5 flex items-center justify-between mb-2">
@@ -274,7 +332,7 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
                 </button>
               </div>
               {recentSearches.map((thread, index) => {
-                const itemIndex = 1 + index // +1 for new chat option
+                const itemIndex = 1 + index
                 return (
                   <button
                     key={thread.id}
@@ -293,10 +351,9 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
             </div>
           )}
 
-          {/* Search results with project name */}
           {searchQuery && searchResults.withProject.length > 0 && (
             <div className="p-1">
-              {searchResults.withProject.map(({ thread, projectName }, index) => {
+              {searchResults.withProject.map(({ thread, projectName, snippet }, index) => {
                 const itemIndex = index
                 return (
                   <button
@@ -309,12 +366,19 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
                     )}
                   >
                     <IconMessage className="size-4 text-muted-foreground shrink-0" />
-                    <div className="flex items-center min-w-0">
-                      <span className="text-xs text-muted-foreground flex items-center gap-1">
-                        <IconFolder className="size-3" />
-                        {projectName} -&nbsp;
-                      </span>
-                      <span className="text-sm truncate">{thread.title}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center min-w-0">
+                        <span className="text-xs text-muted-foreground flex items-center gap-1 shrink-0">
+                          <IconFolder className="size-3" />
+                          {projectName} -&nbsp;
+                        </span>
+                        <span className="text-sm truncate">{thread.title}</span>
+                      </div>
+                      {snippet && (
+                        <p className="text-xs text-muted-foreground/70 truncate mt-0.5">
+                          {snippet}
+                        </p>
+                      )}
                     </div>
                   </button>
                 )
@@ -322,24 +386,29 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
             </div>
           )}
 
-          {/* Search results without project name */}
           {searchQuery && searchResults.withoutProject.length > 0 && (
             <div className="p-1">
-              {searchResults.withoutProject.map((thread, index) => {
-                const itemIndex =
-                  searchResults.withProject.length + index
+              {searchResults.withoutProject.map(({ thread, snippet }, index) => {
+                const itemIndex = searchResults.withProject.length + index
                 return (
                   <button
                     key={thread.id}
                     data-index={itemIndex}
                     onClick={() => handleSelectThread(thread.id)}
                     className={cn(
-                      'w-full flex items-center gap-2 px-3 py-2 rounded-md text-left hover:bg-secondary/60 transition-colors cursor-pointer',
+                      'w-full flex flex-col gap-0.5 px-3 py-2 rounded-md text-left hover:bg-secondary/60 transition-colors cursor-pointer',
                       selectedIndex === itemIndex && 'bg-secondary/50'
                     )}
                   >
-                    <IconMessage className="size-4 text-muted-foreground shrink-0" />
-                    <span className="text-sm truncate">{thread.title}</span>
+                    <div className="flex items-center gap-2">
+                      <IconMessage className="size-4 text-muted-foreground shrink-0" />
+                      <span className="text-sm truncate">{thread.title}</span>
+                    </div>
+                    {snippet && (
+                      <p className="text-xs text-muted-foreground/70 truncate pl-6">
+                        {snippet}
+                      </p>
+                    )}
                   </button>
                 )
               })}
@@ -347,8 +416,7 @@ export function SearchDialog({ open, onOpenChange }: SearchDialogProps) {
           )}
         </div>
 
-        {/* Footer with keyboard hints */}
-        <div className="flex items-center justify-between border-t  px-3 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
               <kbd className="px-1.5 py-0.5 bg-secondary/10 rounded text-[10px]">

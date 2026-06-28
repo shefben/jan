@@ -1,0 +1,18 @@
+Jan final local AI stack patch applied at 2026-06-27 17:19:35
+
+This script targets a clean upstream janhq/jan checkout and applies all local feature ports in one pass.
+Run validation:
+  pnpm typecheck
+  cargo check --manifest-path src-tauri/Cargo.toml
+
+Feature groups:
+  - reranking API and RAG reranking
+  - local embedding model selection
+  - turboquant-plus backend/cache handling
+  - speculative decoding settings/preset support
+  - full Hub llmfit scoring
+  - Hub categories and model UX changes
+  - capability toggles and model lifecycle API
+  - copyable inline code
+  - full-text thread search
+  - Windows Makefile Copy-Item fix

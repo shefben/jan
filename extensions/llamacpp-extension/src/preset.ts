@@ -24,6 +24,16 @@ type ModelYaml = ModelConfig & {
   parallel?: number
   cont_batching?: boolean
   pooling?: 'none' | 'mean' | 'cls' | 'last' | 'rank'
+  reranking?: boolean
+  capabilities?: { embedding?: boolean; rerank?: boolean; chat?: boolean }
+  preferred_for?: string[]
+  score_normalization?: 'none' | 'sigmoid' | 'auto'
+  max_tokens_per_doc?: number
+  draft_model_id?: string
+  draft_model_path?: string
+  spec_type?: string
+  draft_max?: number
+  draft_min?: number
   ubatch_size?: number
   batch_size?: number
   mtp_layers?: number
@@ -61,6 +71,11 @@ function escapeIniValue(v: string): string {
   return String(v).replace(/[\r\n]+/g, ' ').trim()
 }
 
+
+function isTurboquantPlusBackend(versionBackend: unknown): boolean {
+  return typeof versionBackend === 'string' && versionBackend.startsWith('turboquant-plus-')
+}
+
 /**
  * Walks `<providerPath>/models/*` recursively for `model.yml` files and emits
  * a router preset INI to `<providerPath>/router.preset.ini`. Returns the
@@ -71,7 +86,7 @@ export async function generatePreset(
   janDataFolderPath: string,
   config: LlamacppConfig,
   opts: { supportsMtp?: boolean } = {}
-): Promise<{ path: string; embeddingCount: number }> {
+): Promise<{ path: string; embeddingCount: number; rerankingCount: number }> {
   const supportsMtp = opts.supportsMtp === true
   const modelsDir = await joinPath([providerPath, 'models'])
 
@@ -318,6 +333,7 @@ export async function generatePreset(
 
   // ---------- per-model sections ----------
   let embeddingCount = 0
+  let rerankingCount = 0
   for (const { modelId, configPath } of modelEntries) {
     let mc: ModelYaml
     try {
@@ -468,14 +484,24 @@ export async function generatePreset(
       }
     }
 
-    if (mc.embedding === true) {
-      embeddingCount++
+    const capabilityRerank = mc.capabilities?.rerank === true
+    const isReranker = mc.reranking === true || capabilityRerank
+    const needsEmbeddingMode = mc.embedding === true || mc.capabilities?.embedding === true || isReranker
+
+    if (isReranker) rerankingCount++
+    else if (mc.embedding === true || mc.capabilities?.embedding === true) embeddingCount++
+
+    if (needsEmbeddingMode) {
       lines.push('embeddings = true')
-      const pooling =
-        typeof mc.pooling === 'string' && mc.pooling.length > 0
+      const pooling = isReranker
+        ? 'rank'
+        : typeof mc.pooling === 'string' && mc.pooling.length > 0
           ? mc.pooling
           : 'mean'
       lines.push(`pooling = ${escapeIniValue(pooling)}`)
+      if (isReranker) {
+        lines.push('reranking = true')
+      }
       const ubatch =
         typeof mc.ubatch_size === 'number' && mc.ubatch_size > 0
           ? mc.ubatch_size
@@ -489,6 +515,27 @@ export async function generatePreset(
     }
 
     lines.push('load-on-startup = false')
+    const isUtilityModelForRuntime = mc.embedding === true || mc.reranking === true || mc.capabilities?.embedding === true || mc.capabilities?.rerank === true
+
+    if (isTurboquantPlusBackend(globalConfig?.version_backend ?? mc.version_backend)) {
+      lines.push('cache-type-k = turbo3')
+      lines.push('cache-type-v = turbo3')
+    }
+    if (!isUtilityModelForRuntime) {
+      const specType = typeof mc.spec_type === 'string' ? mc.spec_type.trim() : ''
+      if (specType && specType !== 'none') {
+        lines.push(`speculative.type = ${escapeIniValue(specType)}`)
+      }
+      const draftPath = typeof mc.draft_model_path === 'string' ? mc.draft_model_path.trim() : ''
+      if (draftPath) {
+        lines.push(`model-draft = ${escapeIniValue(draftPath)}`)
+      }
+      const draftMax = typeof mc.draft_max === 'number' ? mc.draft_max : Number(mc.draft_max ?? 0)
+      if (Number.isFinite(draftMax) && draftMax > 0) lines.push(`draft-max = ${Math.floor(draftMax)}`)
+      const draftMin = typeof mc.draft_min === 'number' ? mc.draft_min : Number(mc.draft_min ?? 0)
+      if (Number.isFinite(draftMin) && draftMin > 0) lines.push(`draft-min = ${Math.floor(draftMin)}`)
+    }
+
     lines.push('')
   }
 
@@ -519,5 +566,5 @@ export async function generatePreset(
     }
   }
 
-  return { path: outPath, embeddingCount }
+  return { path: outPath, embeddingCount, rerankingCount }
 }

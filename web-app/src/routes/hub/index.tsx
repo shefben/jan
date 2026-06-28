@@ -30,6 +30,10 @@ import {
   IconEye,
   IconSearch,
   IconTool,
+  IconBrain,
+  IconCode,
+  IconPencil,
+  IconStar,
 } from '@tabler/icons-react'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -58,6 +62,8 @@ import { MlxModelDownloadAction } from '@/containers/MlxModelDownloadAction'
 import { DEFAULT_MODEL_QUANTIZATIONS } from '@/constants/models'
 import { Button } from '@/components/ui/button'
 import { RenderMarkdown } from '@/containers/RenderMarkdown'
+import { ModelScoreBadge } from '@/components/ModelScoreBadge'
+import { useModelScore } from '@/hooks/useModelScores'
 
 type SearchParams = {
   repo: string
@@ -93,6 +99,57 @@ function getQuantTier(modelId: string): QuantTier | null {
   return null
 }
 
+
+type Category = {
+  id: string
+  label: string
+  icon: React.ReactNode
+  match: (model: CatalogModel) => boolean
+}
+
+const CATEGORY_TEXT = (m: CatalogModel) =>
+  `${m.model_name} ${m.description ?? ''} ${m.developer ?? ''}`.toLowerCase()
+
+const CATEGORIES: Category[] = [
+  { id: 'all', label: 'All', icon: null, match: () => true },
+  {
+    id: 'coding',
+    label: 'Coding',
+    icon: <IconCode size={13} />,
+    match: (m) => /cod(e|ing|er)|starcoder|deepseek.?coder|devstral|granite.?code|qwen.?coder/.test(CATEGORY_TEXT(m)),
+  },
+  {
+    id: 'reasoning',
+    label: 'Reasoning',
+    icon: <IconBrain size={13} />,
+    match: (m) => /reason|think(ing)?|\br1\b|qwq|deepseek.?r\d|\bo[13]-|skywork/.test(CATEGORY_TEXT(m)),
+  },
+  {
+    id: 'creative',
+    label: 'Creative',
+    icon: <IconPencil size={13} />,
+    match: (m) => /creat|writ(e|ing)|story|novel|roleplay|\brp\b|chat|llama|mistral/.test(CATEGORY_TEXT(m)),
+  },
+  {
+    id: 'vision',
+    label: 'Vision',
+    icon: <IconEye size={13} />,
+    match: (m) => (m.num_mmproj ?? 0) > 0,
+  },
+  {
+    id: 'agentic',
+    label: 'Agentic',
+    icon: <IconTool size={13} />,
+    match: (m) => !!m.tools,
+  },
+  {
+    id: 'small',
+    label: 'Small (≤4B)',
+    icon: <IconStar size={13} />,
+    match: (m) => /[-_. ]([1234]b)([-_. ]|$)|nano|mini(?!mal)|(^|[^a-z])small([^a-z]|$)/.test(m.model_name.toLowerCase()),
+  },
+]
+
 export const Route = createFileRoute(route.hub.index as any)({
   component: HubContent,
   validateSearch: (search: Record<string, unknown>): SearchParams => ({
@@ -105,6 +162,13 @@ function HubContent() {
   const parentRef = useRef(null)
   const huggingfaceToken = useGeneralSetting((state) => state.huggingfaceToken)
   const serviceHub = useServiceHub()
+
+  const { modelScores, fetchModelScore } = useModelScore(
+    useShallow((state) => ({
+      modelScores: state.scores,
+      fetchModelScore: state.fetchModelScore,
+    }))
+  )
 
   const { t } = useTranslation()
 
@@ -142,6 +206,7 @@ function HubContent() {
 
   const [searchValue, setSearchValue] = useState('')
   const [sortSelected, setSortSelected] = useState('newest')
+  const [activeCategory, setActiveCategory] = useState('all')
   const [expandedModels, setExpandedModels] = useState<Record<string, boolean>>(
     {}
   )
@@ -243,17 +308,26 @@ function HubContent() {
         }))
         .filter((model) => (model.quants?.length ?? 0) > 0)
     }
+    if (activeCategory !== 'all') {
+      const cat = CATEGORIES.find((c) => c.id === activeCategory)
+      if (cat) filtered = filtered.filter(cat.match)
+    }
     // Add HuggingFace repo at the beginning if available
     if (huggingFaceRepo) {
       filtered = [huggingFaceRepo, ...filtered]
     }
-    return filtered
+    return filtered?.map((model) => ({
+      ...model,
+      score: modelScores[model.model_name],
+    }))
   }, [
     sortedModels,
     debouncedSearchValue,
     showOnlyDownloaded,
+    activeCategory,
     huggingFaceRepo,
     searchOptions,
+    modelScores,
   ])
 
   // Dynamic estimate size based on model state
@@ -285,6 +359,22 @@ function HubContent() {
       : { count: 0, getScrollElement: () => null, estimateSize: () => 0 }
   )
 
+  useEffect(() => {
+    rowVirtualizer.scrollToOffset(0, { align: 'start' })
+  }, [activeCategory, rowVirtualizer])
+
+
+
+  const visibleScoreIndices = rowVirtualizer.getVirtualItems().map((item) => item.index).join(',')
+
+  useEffect(() => {
+    rowVirtualizer.getVirtualItems().forEach((virtualItem) => {
+      const model = filteredModels[virtualItem.index]
+      if (!model || modelScores[model.model_name]) return
+      void fetchModelScore(model)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchModelScore, filteredModels, modelScores, visibleScoreIndices])
   useEffect(() => {
     // Use startTransition to keep UI responsive during data fetch
     startTransition(() => {
@@ -346,6 +436,7 @@ function HubContent() {
     setIsSearching(false)
     setSearchValue(e.target.value)
     setHuggingFaceRepo(null) // Clear previous repo info
+    setActiveCategory('all')
 
     if (!showOnlyDownloaded) {
       fetchHuggingFaceModel(e.target.value)
@@ -455,7 +546,33 @@ function HubContent() {
             </div>
           </div>
         </HeaderPage>
-        <div ref={parentRef} className="p-4 w-full h-[calc(100%-60px)] overflow-y-auto! first-step-setup-local-provider">
+        <div className="shrink-0 border-b border-border bg-background/95 px-4 py-2">
+          <div className="mx-auto flex w-full md:w-4/5 xl:w-4/6 gap-2 overflow-x-auto scrollbar-hide">
+            {CATEGORIES.map((category) => {
+              const active = activeCategory === category.id
+              return (
+                <button
+                  key={category.id}
+                  type="button"
+                  onClick={() => {
+                    setIsInitialLoad(true)
+                    setActiveCategory(category.id)
+                  }}
+                  className={cn(
+                    'shrink-0 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                    active
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground'
+                  )}
+                >
+                  {category.icon}
+                  {category.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        <div ref={parentRef} className="p-4 w-full h-[calc(100%-104px)] overflow-y-auto! first-step-setup-local-provider">
           <div className="flex flex-col h-full justify-between gap-4 gap-y-3 w-full md:w-4/5 xl:w-4/6 mx-auto">
             {/* Show skeleton immediately on navigation, then show actual content when loaded */}
             {(isInitialLoad || (loading && !filteredModels.length)) ? (
@@ -575,7 +692,8 @@ function HubContent() {
                                         DEFAULT_MODEL_QUANTIZATIONS
                                       )?.file_size}
                                 </span>
-                                <ModelInfoHoverCard
+                                <ModelScoreBadge score={filteredModels[virtualItem.index].score} compact />
+                              <ModelInfoHoverCard
                                   model={filteredModels[virtualItem.index]}
                                   defaultModelQuantizations={
                                     DEFAULT_MODEL_QUANTIZATIONS

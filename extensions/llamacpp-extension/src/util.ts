@@ -62,6 +62,36 @@ export function setDefaultEmbeddingModelId(provider: string, modelId: string) {
   }
 }
 
+export function getDefaultRerankingModelId(
+  provider: string = 'llamacpp'
+): string | undefined {
+  try {
+    const raw = localStorage.getItem('default-reranking-model')
+    if (!raw) return undefined
+    const parsed = JSON.parse(raw)
+    const map = parsed?.state?.defaultByProvider
+    const id = map && map[provider]
+    return typeof id === 'string' && id.length > 0 ? id : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function setDefaultRerankingModelId(provider: string, modelId: string) {
+  try {
+    const raw = localStorage.getItem('default-reranking-model')
+    const parsed = raw ? JSON.parse(raw) : { state: {}, version: 0 }
+    const state = parsed.state ?? {}
+    const map = state.defaultByProvider ?? {}
+    map[provider] = modelId
+    parsed.state = { ...state, defaultByProvider: map }
+    if (parsed.version === undefined) parsed.version = 0
+    localStorage.setItem('default-reranking-model', JSON.stringify(parsed))
+  } catch {
+    /* localStorage write failed; non-fatal */
+  }
+}
+
 export function getProxyConfig(): Record<
   string,
   string | string[] | boolean
@@ -137,6 +167,22 @@ export function getProxyConfig(): Record<
   }
 }
 
+// --- RAG embedding model selection (testable without extension I/O) ---
+export const DEFAULT_EMBEDDING_MODEL_ID = 'sentence-transformer-mini'
+
+export function resolveEmbeddingModelIdFromModels(
+  configuredTrimmed: string,
+  models: Array<{ id: string; embedding?: boolean; reranking?: boolean; capabilities?: { rerank?: boolean; embedding?: boolean } }>
+): string {
+  if (configuredTrimmed) return configuredTrimmed
+  const embeddingModels = models
+    .filter((m) => m.embedding === true && m.reranking !== true && m.capabilities?.rerank !== true)
+    .sort((a, b) => a.id.localeCompare(b.id))
+  if (embeddingModels.length === 0) return DEFAULT_EMBEDDING_MODEL_ID
+  const preferred = embeddingModels.find((m) => m.id === DEFAULT_EMBEDDING_MODEL_ID)
+  return (preferred ?? embeddingModels[0]).id
+}
+
 // --- Embedding batching helpers ---
 
 export type EmbedBatch = { batch: string[]; offset: number }
@@ -183,6 +229,59 @@ export function detectEmbeddingFromGgufMeta(
         ? Number(raw)
         : NaN
   return Number.isFinite(n) && n > 0
+}
+
+
+const RERANKING_NAME_RE =
+  /(^|[\s._\-/])(?:rerank|reranker|cross[\s._\-]?encoder|bge[\s._\-]?reranker|jina[\s._\-]?reranker|qwen3[\s._\-]?reranker|mxbai[\s._\-]?rerank)([\s._\-/]|$)/i
+
+function asMetaString(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function metaStringHaystack(
+  meta: Record<string, unknown> | undefined,
+  modelId: string
+): string {
+  if (!meta) return modelId
+  const keys = [
+    'general.name',
+    'general.basename',
+    'general.description',
+    'general.source.url',
+    'general.url',
+    'general.repo_url',
+    'tokenizer.ggml.model',
+  ]
+  return [modelId, ...keys.map((key) => asMetaString(meta[key]))]
+    .filter(Boolean)
+    .join(' ')
+}
+
+function hasExplicitRankPooling(
+  meta: Record<string, unknown> | undefined
+): boolean {
+  if (!meta) return false
+  const arch = meta['general.architecture']
+  const keys = typeof arch === 'string' ? [`${arch}.pooling_type`] : []
+  for (const key of Object.keys(meta)) {
+    if (key.endsWith('.pooling_type') && !keys.includes(key)) keys.push(key)
+  }
+  for (const key of keys) {
+    const raw = meta[key]
+    if (typeof raw === 'string' && raw.toLowerCase().includes('rank')) return true
+  }
+  return false
+}
+
+export function detectRerankingFromGgufMeta(
+  meta: Record<string, unknown> | undefined,
+  modelId: string = ''
+): boolean {
+  const haystack = metaStringHaystack(meta, modelId)
+  if (RERANKING_NAME_RE.test(haystack)) return true
+  if (hasExplicitRankPooling(meta)) return true
+  return false
 }
 
 export function detectMtpLayersFromGgufMeta(

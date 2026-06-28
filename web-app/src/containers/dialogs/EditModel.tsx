@@ -19,10 +19,19 @@ import {
   IconLoader2,
   IconHeadphones,
   IconVideo,
+  IconAtom,
+  IconWorld,
+  IconCodeCircle2,
+  IconSparkles,
+  IconInfoCircle,
 } from '@tabler/icons-react'
 import { useState, useEffect } from 'react'
 import { useTranslation } from '@/i18n/react-i18next-compat'
 import { toast } from 'sonner'
+import {
+  detectModelCapabilities,
+  hasDetectedCapabilities,
+} from '@/lib/model-capabilities-detector'
 
 // No need to define our own interface, we'll use the existing Model type
 type DialogEditModelProps = {
@@ -49,7 +58,11 @@ export const DialogEditModel = ({
     tools: false,
     audio: false,
     video: false,
+    reasoning: false,
+    web_search: false,
+    embeddings: false,
   })
+  const [isAutoDetected, setIsAutoDetected] = useState(false)
 
   // Initialize with the provided model ID or the first model if available
   useEffect(() => {
@@ -73,16 +86,34 @@ export const DialogEditModel = ({
     tools: capabilitiesList.includes('tools'),
     audio: capabilitiesList.includes('audio'),
     video: capabilitiesList.includes('video'),
+    reasoning: capabilitiesList.includes('reasoning'),
+    web_search: capabilitiesList.includes('web_search'),
+    embeddings: capabilitiesList.includes('embeddings'),
   })
 
   // Initialize capabilities and display name from selected model
   useEffect(() => {
     if (selectedModel) {
       const modelCapabilities = selectedModel.capabilities || []
-      const capsObject = capabilitiesToObject(modelCapabilities)
+      const userConfigured = (selectedModel as Model & { _userConfiguredCapabilities?: boolean })._userConfiguredCapabilities
+      let capsObject = capabilitiesToObject(modelCapabilities)
+      let autoDetected = false
+      if (!userConfigured) {
+        const detected = detectModelCapabilities(selectedModel.id)
+        if (hasDetectedCapabilities(detected)) {
+          capsObject = {
+            ...capsObject,
+            reasoning: capsObject.reasoning || detected.reasoning,
+            web_search: capsObject.web_search || detected.web_search,
+            embeddings: capsObject.embeddings || detected.embeddings,
+          }
+          autoDetected = true
+        }
+      }
 
       setCapabilities(capsObject)
       setOriginalCapabilities(capsObject)
+      setIsAutoDetected(autoDetected)
 
       // Use existing displayName if available, otherwise fall back to model ID
       const displayNameValue = (selectedModel as Model & { displayName?: string }).displayName || selectedModel.id
@@ -240,6 +271,12 @@ export const DialogEditModel = ({
           <h3 className="text-sm font-medium mb-3">
             {t('providers:editModel.capabilities')}
           </h3>
+          {isAutoDetected && (
+            <div className="flex items-start gap-2 mb-3 rounded-md bg-primary/10 px-3 py-2 text-xs text-primary">
+              <IconSparkles size={14} className="mt-0.5 shrink-0" />
+              <span>Capabilities auto-detected from model name. Review and adjust if needed.</span>
+            </div>
+          )}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
@@ -273,6 +310,39 @@ export const DialogEditModel = ({
                 }
                 disabled={isLoading}
               />
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <IconAtom className="size-4 text-muted-foreground" />
+                  <span className="text-sm">{t('providers:editModel.reasoning')}</span>
+                </div>
+                <Switch id="reasoning-capability" checked={capabilities.reasoning} onCheckedChange={(checked) => handleCapabilityChange('reasoning', checked)} disabled={isLoading} />
+              </div>
+              {capabilities.reasoning && <div className="flex items-start gap-1.5 pl-6 text-xs text-muted-foreground"><IconInfoCircle size={12} className="mt-0.5 shrink-0" /><span>Only works with reasoning models. Has no effect on standard models.</span></div>}
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <IconWorld className="size-4 text-muted-foreground" />
+                  <span className="text-sm">{t('providers:editModel.webSearch')}</span>
+                </div>
+                <Switch id="web-search-capability" checked={capabilities.web_search} onCheckedChange={(checked) => handleCapabilityChange('web_search', checked)} disabled={isLoading} />
+              </div>
+              {capabilities.web_search && <div className="flex items-start gap-1.5 pl-6 text-xs text-muted-foreground"><IconInfoCircle size={12} className="mt-0.5 shrink-0" /><span>Only works with providers or models that support built-in web search.</span></div>}
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <IconCodeCircle2 className="size-4 text-muted-foreground" />
+                  <span className="text-sm">{t('providers:editModel.embeddings')}</span>
+                </div>
+                <Switch id="embeddings-capability" checked={capabilities.embeddings} onCheckedChange={(checked) => handleCapabilityChange('embeddings', checked)} disabled={isLoading} />
+              </div>
+              {capabilities.embeddings && <div className="flex items-start gap-1.5 pl-6 text-xs text-muted-foreground"><IconInfoCircle size={12} className="mt-0.5 shrink-0" /><span>Enables semantic search/RAG tooling for this model.</span></div>}
             </div>
 
             <div className="flex items-center justify-between">

@@ -78,6 +78,7 @@ function AttachmentsSettings() {
       setSearchMode: s.setSearchMode,
       setParseMode: s.setParseMode,
       setAutoInlineContextRatio: s.setAutoInlineContextRatio,
+      setSetting: s.setSetting,
     }))
   )
 
@@ -162,6 +163,9 @@ function AttachmentsSettings() {
             break
           case 'auto_inline_context_ratio':
             sel.setAutoInlineContextRatio(validated)
+            break
+          default:
+            sel.setSetting(key, validated)
             break
         }
 
