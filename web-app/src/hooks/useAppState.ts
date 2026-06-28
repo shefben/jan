@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useMemo } from 'react'
 import { ThreadMessage } from '@janhq/core'
 import { MCPTool } from '@/types/completion'
 
@@ -250,15 +251,25 @@ export const useAppState = create<AppState>()((set) => ({
     }),
 }))
 
-export const useActiveThreadIds = () =>
-  useAppState((state) => {
+export const useActiveThreadIds = () => {
+  // React 19/useSyncExternalStore requires selector snapshots to be cached.
+  // Returning new Set() directly from the Zustand selector creates a new
+  // reference every render and can trigger:
+  // "The result of getSnapshot should be cached to avoid an infinite loop".
+  const activeThreadIdsKey = useAppState((state) => {
     const ids = new Set<string>()
     Object.keys(state.streamingContents).forEach((id) => ids.add(id))
     Object.keys(state.loadingModels).forEach((id) => ids.add(id))
     Object.keys(state.cancelToolCalls).forEach((id) => ids.add(id))
     Object.keys(state.busyThreads).forEach((id) => ids.add(id))
-    return ids
+    return Array.from(ids).sort().join('\u0000')
   })
+
+  return useMemo(() => {
+    if (!activeThreadIdsKey) return new Set<string>()
+    return new Set(activeThreadIdsKey.split('\u0000').filter(Boolean))
+  }, [activeThreadIdsKey])
+}
 
 export const useIsThreadActive = (threadId: string | undefined) =>
   useAppState((state) =>

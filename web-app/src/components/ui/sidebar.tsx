@@ -92,8 +92,11 @@ const SidebarProvider = React.forwardRef<
 
 		//* wrapper to call both internal state and external callback
 		const setWidth = React.useCallback((newWidth: string) => {
-			setWidthState(newWidth);
-			onWidthChange?.(newWidth);
+			setWidthState((previousWidth) => {
+				if (previousWidth === newWidth) return previousWidth;
+				onWidthChange?.(newWidth);
+				return newWidth;
+			});
 		}, [onWidthChange]);
 		const [openMobile, setOpenMobile] = React.useState(false);
 		//* new state for tracking is dragging rail
