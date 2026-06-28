@@ -2231,10 +2231,15 @@ const ChatInput = memo(function ChatInput({
                 {!effectiveAgentMode && selectedModel?.capabilities?.includes('web_search') && (
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Button variant="ghost" size="icon-xs">
+                      <Button
+                        variant={capabilityToggles.webSearch ? "default" : "ghost"}
+                        size="icon-xs"
+                        className={cn(capabilityToggles.webSearch && 'text-primary bg-primary/10 hover:bg-primary/10')}
+                        onClick={() => setCapabilityToggle(capabilityKey, 'webSearch', !capabilityToggles.webSearch)}
+                      >
                         <IconWorld
                           size={18}
-                          className="text-muted-foreground"
+                          className={cn('text-muted-foreground', capabilityToggles.webSearch && 'text-primary')}
                         />
                       </Button>
                     </TooltipTrigger>

@@ -88,12 +88,18 @@
     "key": "default_reranker_model",
     "title": "Default reranker model",
     "description": "Reranker model id to prefer for /v1/rerank and automatic RAG reranking. Use auto to select the best local reranker.",
-    "controllerType": "input",
+    "controllerType": "dropdown",
     "controllerProps": {
       "value": "auto",
       "placeholder": "auto or local reranker model id",
       "type": "text",
-      "textAlign": "right"
+      "textAlign": "right",
+      "options": [
+        {
+          "value": "auto",
+          "name": "Auto"
+        }
+      ]
     }
   },
   {
@@ -543,6 +549,34 @@
           "name": "ngram-map-k4v (experimental)"
         }
       ]
+    }
+  },
+  {
+    "key": "draft_max",
+    "title": "Speculative draft max",
+    "description": "Maximum draft tokens for model-free speculative decoding. 0 disables the explicit override.",
+    "controllerType": "input",
+    "controllerProps": {
+      "value": 0,
+      "placeholder": "0",
+      "type": "number",
+      "textAlign": "right",
+      "min": 0,
+      "step": 1
+    }
+  },
+  {
+    "key": "draft_min",
+    "title": "Speculative draft min",
+    "description": "Minimum draft tokens for model-free speculative decoding. 0 disables the explicit override.",
+    "controllerType": "input",
+    "controllerProps": {
+      "value": 0,
+      "placeholder": "0",
+      "type": "number",
+      "textAlign": "right",
+      "min": 0,
+      "step": 1
     }
   }
 ]

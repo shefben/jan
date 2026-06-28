@@ -1,37 +1,5 @@
 import type { modelInfo } from '@janhq/core'
 
-// local-ai-stack isReranking helper
-export const isReranking = (model: any): boolean => {
-  const value = model ?? {}
-  const metadata = value.metadata ?? value.meta ?? {}
-  const lower = (input: unknown): string => String(input ?? '').toLowerCase()
-  const hasCap = (capabilities: unknown): boolean => {
-    if (!Array.isArray(capabilities)) return false
-    return capabilities.some((cap) => {
-      const name = lower(cap)
-      return name === 'rerank' || name === 'reranking' || name === 'rank'
-    })
-  }
-
-  return Boolean(
-    value.reranking === true ||
-      value.isReranking === true ||
-      value.is_reranking === true ||
-      metadata.reranking === true ||
-      metadata.isReranking === true ||
-      metadata.is_reranking === true ||
-      lower(value.type) === 'reranker' ||
-      lower(value.model_type) === 'reranker' ||
-      lower(metadata.type) === 'reranker' ||
-      lower(metadata.model_type) === 'reranker' ||
-      lower(value.id).includes('rerank') ||
-      lower(value.name).includes('rerank') ||
-      lower(value.model).includes('rerank') ||
-      hasCap(value.capabilities) ||
-      hasCap(metadata.capabilities)
-  )
-}
-
 type MaybeSetting = { controller_props?: { value?: unknown }; controllerProps?: { value?: unknown }; value?: unknown }
 type MaybeModel = Partial<modelInfo> & { settings?: Record<string, MaybeSetting>; capabilities?: Record<string, boolean> | string[]; embedding?: boolean; reranking?: boolean }
 

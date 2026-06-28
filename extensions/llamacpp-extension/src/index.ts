@@ -124,6 +124,10 @@ const PRESET_AFFECTING_KEYS = new Set<string>([
   'cache_reuse',
   'swa_full',
   'keep',
+  'spec_type',
+  'draft_max',
+  'draft_min',
+  'draft_model_path',
 ])
 
 /**
@@ -289,6 +293,29 @@ const MODEL_SETTINGS_YAML_MAPPING: Record<
   offload_mmproj: {
     yamlKey: 'mmproj_offload',
     coerce: (v) => (v === false ? false : null),
+  },
+  spec_type: {
+    yamlKey: 'spec_type',
+    coerce: (v) =>
+      typeof v === 'string' && v.trim().length > 0 ? v.trim() : null,
+  },
+  draft_model_path: {
+    yamlKey: 'draft_model_path',
+    coerce: (v) =>
+      typeof v === 'string' && v.trim().length > 0 ? v.trim() : null,
+  },
+  draft_model_id: {
+    yamlKey: 'draft_model_id',
+    coerce: (v) =>
+      typeof v === 'string' && v.trim().length > 0 ? v.trim() : null,
+  },
+  draft_max: {
+    yamlKey: 'draft_max',
+    coerce: coerceIntSetting,
+  },
+  draft_min: {
+    yamlKey: 'draft_min',
+    coerce: coerceIntSetting,
   },
 }
 
@@ -2076,7 +2103,8 @@ export default class llamacpp_extension extends AIEngine {
           providerId: this.provider,
           port: 0, // port is not known until the model is loaded
           sizeBytes: modelConfig.size_bytes ?? 0,
-          embedding: isEmbedding,
+          embedding: isEmbedding || isReranking,
+          reranking: isReranking,
           imported: isAbsolute,
           capabilities: capabilities.length > 0 ? capabilities : undefined,
         } as modelInfo
@@ -2084,6 +2112,12 @@ export default class llamacpp_extension extends AIEngine {
       } catch (err) {
         logger.warn(`list: skipping model ${modelId}: ${String(err)}`)
       }
+    }
+
+    try {
+      await this.refreshDefaultRerankerSetting(modelInfos)
+    } catch (err) {
+      logger.warn(`list: failed to refresh default reranker dropdown: ${String(err)}`)
     }
 
     return modelInfos
@@ -2566,6 +2600,7 @@ export default class llamacpp_extension extends AIEngine {
     const janDataFolderPath = await getJanDataFolderPath()
     const fullModelPath = await joinPath([janDataFolderPath, modelPath])
     let isEmbedding = false
+    let isReranking = false
     let mtpLayers = 0
     let resolvedName: string | undefined
 
@@ -2577,6 +2612,10 @@ export default class llamacpp_extension extends AIEngine {
       )
 
       if (detectEmbeddingFromGgufMeta(modelMetadata.metadata)) {
+        isEmbedding = true
+      }
+      if (detectRerankingFromGgufMeta(modelMetadata.metadata, modelId)) {
+        isReranking = true
         isEmbedding = true
       }
       mtpLayers = detectMtpLayersFromGgufMeta(modelMetadata.metadata)
@@ -2643,6 +2682,9 @@ export default class llamacpp_extension extends AIEngine {
       mmproj_size_bytes: opts.mmprojSize,
       embedding: isEmbedding,
       embedding_check_v: EMBEDDING_CHECK_VERSION,
+      reranking: isReranking,
+      reranking_check_v: RERANKING_CHECK_VERSION,
+      ...(isReranking ? { capabilities: { embedding: true, rerank: true } } : {}),
       mtp_layers: mtpLayers,
       mtp_check_v: MTP_CHECK_VERSION,
       // A separate draft gguf is downloaded only to be used — enable MTP by
@@ -2669,6 +2711,7 @@ export default class llamacpp_extension extends AIEngine {
       mmproj_sha256: opts.mmprojSha256,
       mmproj_size_bytes: opts.mmprojSize,
       embedding: isEmbedding,
+      reranking: isReranking,
     })
 
     if (downloadItems.length > 0) {
@@ -3421,7 +3464,10 @@ export default class llamacpp_extension extends AIEngine {
   async embed(text: string[]): Promise<EmbeddingResponse> {
     const downloadedModelList = await this.list()
     const installedEmbedding = downloadedModelList.filter(
-      (m) => (m as any).embedding === true
+      (m) =>
+        (m as any).embedding === true &&
+        (m as any).reranking !== true &&
+        !(Array.isArray((m as any).capabilities) && (m as any).capabilities.includes('rerank'))
     )
     const hasMini = downloadedModelList.some(
       (m) => m.id === 'sentence-transformer-mini'
@@ -3509,6 +3555,26 @@ export default class llamacpp_extension extends AIEngine {
       (sInfo as SessionInfo).model_id,
       batchResults
     ) as EmbeddingResponse
+  }
+
+  private async refreshDefaultRerankerSetting(models: modelInfo[]): Promise<void> {
+    const rerankers = models.filter(
+      (m) =>
+        (m as any).reranking === true ||
+        (Array.isArray((m as any).capabilities) && (m as any).capabilities.includes('rerank'))
+    )
+    const settings = await readSettingsFile()
+    const entry = settings.find((s) => s.key === 'default_reranker_model')
+    if (!entry?.controllerProps) return
+    const options = [
+      { value: 'auto', name: 'Auto' },
+      ...rerankers.map((m) => ({ value: m.id, name: m.name ?? m.id })),
+    ]
+    const cp = entry.controllerProps as DropdownComponentProps & { value?: unknown; options?: unknown[] }
+    const current = typeof cp.value === 'string' ? cp.value : 'auto'
+    cp.options = options
+    if (!options.some((o) => o.value === current)) cp.value = 'auto'
+    await writeSettingsFile(settings)
   }
 
   private async installedRerankingModels(): Promise<modelInfo[]> {

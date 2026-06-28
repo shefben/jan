@@ -27,6 +27,8 @@ export default class RagExtension extends RAGExtension {
     rerankingMode: 'auto' as 'auto' | 'off' | 'model',
     rerankingModel: 'auto',
     rerankTopKBefore: 60,
+    rerankCandidateMultiplier: 5,
+    rerankMaxCandidates: 40,
     rerankTopNAfter: 8,
     rerankMinRelevanceScore: 0,
     rerankMaxTokensPerDoc: 4096,
@@ -83,6 +85,8 @@ export default class RagExtension extends RAGExtension {
     this.config.rerankingMode = await this.getSetting('reranking_mode', this.config.rerankingMode)
     this.config.rerankingModel = await this.getSetting('reranking_model', this.config.rerankingModel)
     this.config.rerankTopKBefore = await this.getSetting('rerank_top_k_before', this.config.rerankTopKBefore)
+    this.config.rerankCandidateMultiplier = await this.getSetting('rerank_candidate_multiplier', this.config.rerankCandidateMultiplier)
+    this.config.rerankMaxCandidates = await this.getSetting('rerank_max_candidates', this.config.rerankMaxCandidates)
     this.config.rerankTopNAfter = await this.getSetting('rerank_top_n_after', this.config.rerankTopNAfter)
     this.config.rerankMinRelevanceScore = await this.getSetting('rerank_min_relevance_score', this.config.rerankMinRelevanceScore)
     this.config.rerankMaxTokensPerDoc = await this.getSetting('rerank_max_tokens_per_doc', this.config.rerankMaxTokensPerDoc)
@@ -211,7 +215,11 @@ export default class RagExtension extends RAGExtension {
     const s = this.config
     const requestedTopK = (args['top_k'] as number) || s.retrievalLimit || 3
     const shouldRerank = s.rerankingMode !== 'off'
-    const topK = shouldRerank ? Math.max(requestedTopK, s.rerankTopKBefore || 60) : requestedTopK
+    const multiplier = Math.max(1, Number(s.rerankCandidateMultiplier || 1))
+    const maxCandidates = Math.max(1, Number(s.rerankMaxCandidates || s.rerankTopKBefore || 40))
+    const legacyBefore = Math.max(requestedTopK, Number(s.rerankTopKBefore || 0))
+    const multipliedBefore = Math.max(requestedTopK, requestedTopK * multiplier)
+    const topK = shouldRerank ? Math.min(maxCandidates, Math.max(legacyBefore, multipliedBefore)) : requestedTopK
     const threshold = shouldRerank ? Math.min(s.retrievalThreshold ?? 0.3, 0.05) : (s.retrievalThreshold ?? 0.3)
     const mode: 'auto' | 'ann' | 'linear' = s.searchMode || 'auto'
 
@@ -603,6 +611,12 @@ export default class RagExtension extends RAGExtension {
         break
       case 'rerank_top_k_before':
         this.config.rerankTopKBefore = Number(value)
+        break
+      case 'rerank_candidate_multiplier':
+        this.config.rerankCandidateMultiplier = Number(value)
+        break
+      case 'rerank_max_candidates':
+        this.config.rerankMaxCandidates = Number(value)
         break
       case 'rerank_top_n_after':
         this.config.rerankTopNAfter = Number(value)

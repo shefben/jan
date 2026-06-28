@@ -188,7 +188,7 @@ async fn router_loaded_ids(llama_state: &LlamacppState, client: &Client) -> Hash
     let (url, key) = {
         let guard = llama_state.router.lock().await;
         match guard.as_ref() {
-            Some(h) => (format!("http://127.0.0.1:{}/models", h.port), h.api_key.clone()),
+            Some(h) => (format!("http://127.0.0.1:{}/v1/models", h.port), h.api_key.clone()),
             None => return HashSet::new(),
         }
     };
@@ -325,6 +325,88 @@ pub async fn prepare_rerank_request(body_bytes: Bytes, jan_data_folder: &str, cl
     }
     let profile = body.get("profile").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| classify_profile(&query, &docs_value));
     let requested_model = body.get("model").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty() && *s != "auto").map(str::to_string);
+    if cfg.mode.as_deref() == Some("external") {
+        let external_base = cfg.external_base_url
+            .clone()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RerankHttpError {
+                status: hyper::StatusCode::SERVICE_UNAVAILABLE,
+                kind: "external_reranker_not_configured".into(),
+                message: "Reranking mode is external, but external_base_url is missing in llamacpp/reranking.json".into(),
+            })?;
+        let external_model = requested_model
+            .clone()
+            .or_else(|| cfg.external_model.clone())
+            .or_else(|| cfg.model.clone().filter(|m| m != "auto"))
+            .unwrap_or_else(|| "rerank".to_string());
+
+        let max_tokens = body
+            .get("max_tokens_per_doc")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize)
+            .or(cfg.max_tokens_per_doc);
+        let mut docs = Vec::with_capacity(docs_value.len());
+        let mut truncated = 0usize;
+        for d in &docs_value {
+            let formatted = structured_doc_to_text(d);
+            let (t, was) = truncate_approx_tokens(&formatted, max_tokens);
+            if was { truncated += 1; }
+            docs.push(Value::String(t));
+        }
+        let top_n = body
+            .get("top_n")
+            .or_else(|| body.get("top_k"))
+            .and_then(Value::as_u64)
+            .map(|n| (n as usize).max(1).min(docs.len()))
+            .or(cfg.default_top_n.map(|n| n.max(1).min(docs.len())));
+        let return_documents = body.get("return_documents").and_then(Value::as_bool).unwrap_or(true);
+        let normalize_scores = body.get("normalize_scores").or_else(|| body.get("normalize")).and_then(Value::as_bool).unwrap_or(true);
+        let raw_scores = body.get("raw_scores").and_then(Value::as_bool).unwrap_or(false);
+        let evidence_mode = body
+            .get("evidence_mode")
+            .and_then(Value::as_str)
+            .or(cfg.evidence_mode.as_deref())
+            .filter(|m| matches!(*m, "off" | "top_n" | "all"))
+            .unwrap_or("off")
+            .to_string();
+        let min_score = body.get("min_relevance_score").and_then(Value::as_f64).or(cfg.min_relevance_score);
+
+        body["model"] = Value::String(external_model.clone());
+        body["documents"] = Value::Array(docs);
+        if let Some(n) = top_n { body["top_n"] = json!(n); }
+        body["return_documents"] = Value::Bool(false);
+        body.as_object_mut().map(|m| { m.remove("texts"); });
+
+        let trace = RerankTrace {
+            model: external_model.clone(),
+            profile,
+            provider: "external".into(),
+            fallback_used: false,
+            fallback_reason: None,
+            candidate_count: docs_value.len(),
+            truncated_documents: truncated,
+            return_documents,
+            normalize_scores,
+            raw_scores,
+            evidence_mode,
+            min_relevance_score: min_score,
+            top_n,
+            query,
+            original_documents: docs_value,
+        };
+
+        return Ok(PreparedRerankRequest {
+            body: Bytes::from(serde_json::to_vec(&body).unwrap_or_else(|_| b"{}".to_vec())),
+            model_id: external_model,
+            trace,
+            external: Some(ExternalRerankTarget {
+                base_url: external_base,
+                api_key: cfg.external_api_key.clone(),
+            }),
+        });
+    }
+
     let preferred = requested_model.clone().or_else(|| cfg.model.clone().filter(|m| m != "auto"));
     let candidates = collect_reranking_models(jan_data_folder);
     let loaded = router_loaded_ids(llama_state, client).await;

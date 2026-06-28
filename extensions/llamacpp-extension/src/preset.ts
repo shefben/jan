@@ -517,22 +517,49 @@ export async function generatePreset(
     lines.push('load-on-startup = false')
     const isUtilityModelForRuntime = mc.embedding === true || mc.reranking === true || mc.capabilities?.embedding === true || mc.capabilities?.rerank === true
 
-    if (isTurboquantPlusBackend(globalConfig?.version_backend ?? mc.version_backend)) {
+    if (!isUtilityModelForRuntime && isTurboquantPlusBackend(config.version_backend)) {
       lines.push('cache-type-k = turbo3')
       lines.push('cache-type-v = turbo3')
     }
     if (!isUtilityModelForRuntime) {
-      const specType = typeof mc.spec_type === 'string' ? mc.spec_type.trim() : ''
+      const specType =
+        typeof mc.spec_type === 'string' && mc.spec_type.trim().length > 0
+          ? mc.spec_type.trim()
+          : typeof config.spec_type === 'string'
+            ? config.spec_type.trim()
+            : ''
       if (specType && specType !== 'none') {
-        lines.push(`speculative.type = ${escapeIniValue(specType)}`)
+        // llama.cpp server preset keys use the same spelling as CLI long args.
+        lines.push(`spec-type = ${escapeIniValue(specType)}`)
       }
-      const draftPath = typeof mc.draft_model_path === 'string' ? mc.draft_model_path.trim() : ''
-      if (draftPath) {
-        lines.push(`model-draft = ${escapeIniValue(draftPath)}`)
+
+      const explicitDraftPath = typeof mc.draft_model_path === 'string' ? mc.draft_model_path.trim() : ''
+      const draftModelId = typeof mc.draft_model_id === 'string' ? mc.draft_model_id.trim() : ''
+      let resolvedDraftPath = explicitDraftPath
+      if (!resolvedDraftPath && draftModelId) {
+        try {
+          const draftConfigPath = await joinPath([providerPath, 'models', draftModelId, 'model.yml'])
+          if (await fs.existsSync(draftConfigPath)) {
+            const draftCfg = await invoke<ModelYaml>('read_yaml', { path: draftConfigPath })
+            if (typeof draftCfg.model_path === 'string' && draftCfg.model_path.length > 0) {
+              resolvedDraftPath = draftCfg.model_path
+            }
+          }
+        } catch {
+          // Ignore bad draft references; the main model must still be usable.
+        }
       }
-      const draftMax = typeof mc.draft_max === 'number' ? mc.draft_max : Number(mc.draft_max ?? 0)
+      if (resolvedDraftPath) {
+        const isAbs = resolvedDraftPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(resolvedDraftPath)
+        const draftAbs = isAbs ? resolvedDraftPath : await joinPath([janDataFolderPath, resolvedDraftPath])
+        lines.push(`model-draft = ${escapeIniValue(draftAbs)}`)
+      }
+
+      const draftMaxRaw = mc.draft_max ?? config.draft_max ?? 0
+      const draftMax = typeof draftMaxRaw === 'number' ? draftMaxRaw : Number(draftMaxRaw)
       if (Number.isFinite(draftMax) && draftMax > 0) lines.push(`draft-max = ${Math.floor(draftMax)}`)
-      const draftMin = typeof mc.draft_min === 'number' ? mc.draft_min : Number(mc.draft_min ?? 0)
+      const draftMinRaw = mc.draft_min ?? config.draft_min ?? 0
+      const draftMin = typeof draftMinRaw === 'number' ? draftMinRaw : Number(draftMinRaw)
       if (Number.isFinite(draftMin) && draftMin > 0) lines.push(`draft-min = ${Math.floor(draftMin)}`)
     }
 
