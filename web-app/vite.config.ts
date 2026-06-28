@@ -63,6 +63,8 @@ export default defineConfig(({ mode }) => {
     ],
     resolve: {
       alias: {
+        '@streamdown/mermaid': path.resolve(__dirname, './src/lib/disabled-streamdown-mermaid.tsx'),
+        'mermaid': path.resolve(__dirname, './src/lib/disabled-mermaid.ts'),
         '@': path.resolve(__dirname, './src'),
         '@janhq/conversational-extension': path.resolve(__dirname, '../extensions/conversational-extension/src/index.ts'),
       },
