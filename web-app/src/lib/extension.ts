@@ -125,21 +125,65 @@ export class ExtensionManager {
    */
   async load(onProgress?: (done: number, total: number) => void) {
     const exts = this.listExtensions()
+    const __jan_extension_loader_single_start_safe_v4__ = true
+    void __jan_extension_loader_single_start_safe_v4__
+
     let done = 0
     onProgress?.(0, exts.length)
-    const results = await Promise.allSettled(
-      exts.map((ext) =>
-        Promise.resolve(ext.onLoad()).finally(() =>
-          onProgress?.(++done, exts.length)
-        )
-      )
-    )
-    results.forEach((r, i) => {
-      if (r.status === 'rejected') {
-        const name = exts[i]?.name ?? `index ${i}`
-        console.error(`Extension onLoad failed (${name}):`, r.reason)
+
+    const timeoutMs = 15000
+
+    const getName = (ext: BaseExtension, index?: number) => {
+      const extAny = ext as unknown as {
+        name?: string
+        productName?: string
+        constructor?: { name?: string }
       }
-    })
+      return (
+        extAny.name ??
+        extAny.productName ??
+        extAny.constructor?.name ??
+        (typeof index === 'number' ? `extension-${index}` : 'unknown-extension')
+      )
+    }
+
+    const loadOne = async (ext: BaseExtension, index: number): Promise<void> => {
+      const name = getName(ext, index)
+      console.info(`[ExtensionManager] loading ${index + 1}/${exts.length}: ${name}`)
+
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let timedOut = false
+
+      try {
+        await Promise.race([
+          Promise.resolve().then(() => ext.onLoad()),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(() => {
+              timedOut = true
+              console.error(
+                `[ExtensionManager] timeout after ${timeoutMs}ms while loading ${index + 1}/${exts.length}: ${name}`
+              )
+              resolve()
+            }, timeoutMs)
+          }),
+        ])
+
+        if (!timedOut) {
+          console.info(`[ExtensionManager] loaded ${index + 1}/${exts.length}: ${name}`)
+        }
+      } catch (err) {
+        console.error(`[ExtensionManager] failed ${index + 1}/${exts.length}: ${name}`, err)
+      } finally {
+        if (timer) clearTimeout(timer)
+        onProgress?.(++done, exts.length)
+      }
+    }
+
+    for (let i = 0; i < exts.length; i++) {
+      await loadOne(exts[i], i)
+    }
+
+    console.info('[ExtensionManager] extension loading completed')
   }
 
   /**

@@ -65,13 +65,31 @@ export function ExtensionProvider({ children }: PropsWithChildren) {
       setFinishedSetup(true)
     }, 20000)
 
-    setupExtensions().finally(() => clearTimeout(watchdog))
+    const existingSetupPromise = (window as unknown as {
+      __janExtensionSetupPromise?: Promise<void>
+    }).__janExtensionSetupPromise
+
+    const setupPromise =
+      existingSetupPromise ??
+      (() => {
+        const promise = setupExtensions()
+        ;(window as unknown as {
+          __janExtensionSetupPromise?: Promise<void>
+        }).__janExtensionSetupPromise = promise
+        return promise
+      })()
+
+    setupPromise.finally(() => {
+      clearTimeout(watchdog)
+      setFinishedSetup(true)
+    })
 
     return () => {
       clearTimeout(watchdog)
-      if (isMainWindow()) {
-        ExtensionManager.getInstance().unload()
-      }
+      // Do not unload extensions here. In React dev/StrictMode this cleanup can
+      // run during the intentional effect re-run, which kills the llama.cpp
+      // router while the second startup is still registering extensions.
+      // Tauri/app shutdown cleanup handles real process teardown.
     }
   }, [setupExtensions])
 
